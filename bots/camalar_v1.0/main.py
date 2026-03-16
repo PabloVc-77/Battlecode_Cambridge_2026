@@ -15,6 +15,7 @@ import random
 from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
 from botRolex.builder import run_builder
+import bugnav 
 
 # non-centre directions
 DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
@@ -22,6 +23,7 @@ DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
 class Player:
     def __init__(self):
         self.num_spawned = 0 # number of builder bots spawned so far (core)
+        self.navegador = bugnav.BugNav()
 
     def run(self, ct: Controller) -> None:
         etype = ct.get_entity_type()
