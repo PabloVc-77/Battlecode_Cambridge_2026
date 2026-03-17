@@ -15,7 +15,7 @@ import random
 from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
 from botRolex.builder import run_builder
-import bugnav4_opus as bugnav
+import bugnav 
 
 # non-centre directions
 DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
@@ -30,7 +30,6 @@ class Player:
         self.spawn = None
         self.conveyor_mode = False
         self.objetivos = []
-        self.current_target = None
 
 
     def run(self, ct: Controller) -> None:

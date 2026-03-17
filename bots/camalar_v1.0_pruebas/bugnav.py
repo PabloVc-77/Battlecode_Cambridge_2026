@@ -76,7 +76,6 @@ class BugNav:
 
         return nextDir
     
-    prevWallDir = Direction.CENTRE
     def followWall(self, c: Controller, four_dirs: bool):
         dir = self.wallDir
         current = c.get_position()
@@ -86,13 +85,9 @@ class BugNav:
             dx, dy = dir.delta()
             if(four_dirs and dx != 0 and dy != 0):
                 continue
-            
-            if(dir.opposite() == self.prevWallDir):
-                continue
 
             if(c.can_move(dir) or c.can_build_road(current.add(dir))):
                 self.wallDir = dir
-                self.prevWallDir = dir
                 return dir
 
         return Direction.CENTRE

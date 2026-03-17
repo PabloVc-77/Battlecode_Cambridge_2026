@@ -8,19 +8,8 @@ def run_builder(self, c: Controller):
     oreCerca(self, c)
     current = c.get_position()
     target = None
-    entityID = c.get_tile_building_id(current)
-    tileTeam = c.get_team(entityID)
-    if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) == EntityType.CONVEYOR:
-        c.self_destruct()
-        return
-    if self.current_target is None or self.current_target not in self.objetivos:
-        if len(self.objetivos) > 0:
-            self.current_target = self.objetivos[0]
-        else:
-            self.current_target = None
-
-    target = self.current_target
-
+    if(len(self.objetivos) > 0):
+        target = self.objetivos[0]
 
     if target is not None: c.draw_indicator_line(current, target, 204, 39, 245)
     if  (target is not None):
@@ -29,20 +18,12 @@ def run_builder(self, c: Controller):
         c.draw_indicator_line(current, move_pos, 66, 245, 39)
         if c.can_build_harvester(target):
             c.build_harvester(target)
-            if target in self.objetivos:
-                self.objetivos.remove(target)
-            self.current_target = None
+            self.objetivos.remove(target)
         elif(math.sqrt(current.distance_squared(target)) >= math.sqrt(2)):
             if c.can_build_conveyor(move_pos, siguiente_dir.opposite()):
                 c.build_conveyor(move_pos, siguiente_dir.opposite())
             if c.can_move(siguiente_dir):
                 c.move(siguiente_dir)
-        else:
-            # Estamos al lado del target pero no podemos construir harvester
-            # (ya hay uno, o el tile cambió) → descartar y buscar otro
-            if target in self.objetivos:
-                self.objetivos.remove(target)
-            self.current_target = None
         
     else:
         move_dir = self.navegador.moveDvD(c, four_dirs=True)
@@ -83,21 +64,10 @@ def oreCerca(self, c: Controller):
     # lógica para identificar ores aqui
     lista = c.get_nearby_tiles()
     for tile in lista:
-        if c.get_tile_env(tile) in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
-            #and c.get_tile_building_id(tile) is None:
-            building_id = c.get_tile_building_id(tile)
-
-            if(building_id is not None):
-                if c.get_entity_type(building_id) != None:
-                    if tile in self.objetivos:
-                        self.objetivos.remove(tile)
-                    continue  # saltar este tile
-
-            if tile not in self.objetivos:
-                self.objetivos.append(tile)
+        if c.get_tile_env(tile) in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE) and c.get_tile_building_id(tile) is None:
+            self.objetivos.append(tile)
         elif tile in self.objetivos:
             self.objetivos.remove(tile)
-            
     current = c.get_position()
     self.objetivos.sort(key=lambda p: current.distance_squared(p))
     pass
