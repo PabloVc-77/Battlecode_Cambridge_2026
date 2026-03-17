@@ -3,7 +3,7 @@ from cambc import Controller, Direction, EntityType, Environment, Position
 def run_core(self, c: Controller):
         # Spawn a builder on an empty core tile
     ident_near_ores(c)
-    if self.num_spawned < 4:
+    if self.num_spawned < 5:
         pos = c.get_position()  # centre of the 3x3 core
         for dx in range(-1, 2):
             for dy in range(-1, 2):
@@ -12,7 +12,7 @@ def run_core(self, c: Controller):
                     c.spawn_builder(target)
                     self.num_spawned += 1
                     break
-    elif c.get_current_round() % 40 == 0:  # Example round number, replace with actual condition
+    elif c.get_current_round() % 35 == 0:  # Example round number, replace with actual condition
         pos = c.get_position()  # centre of the 3x3 core
         for dx in range(-1, 2):
             for dy in range(-1, 2):
@@ -22,7 +22,7 @@ def run_core(self, c: Controller):
                     break
     
     recursos =c.get_global_resources()  
-    if (c.get_scale_percent() * 10) * 3<= recursos[0] : 
+    if (c.get_scale_percent() / 10) * 3<= recursos[0]  and c.get_current_round() > 700 : 
         pos = c.get_position()  # centre of the 3x3 core
         for dx in range(-1, 2):
             for dy in range(-1, 2):
