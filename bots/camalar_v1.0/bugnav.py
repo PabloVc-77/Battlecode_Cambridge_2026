@@ -28,11 +28,11 @@ class BugNav:
                     nextDir = nextDir.rotate_left()
                     
 
-            if(c.can_move(nextDir)):
+            if(c.can_move(nextDir) or c.can_build_road(current.add(nextDir))):
                 return nextDir
             elif(four_dirs and flag):
                 nextDir = nextDir.rotate_right().rotate_right()
-                if(c.can_move(nextDir)):
+                if(c.can_move(nextDir) or c.can_build_road(current.add(nextDir))):
                     return nextDir
             
             # Hit obstacle → start wall following
@@ -68,14 +68,15 @@ class BugNav:
     
     def followWall(self, c: Controller, four_dirs: bool):
         dir = self.wallDir
-        for i in range(8):
+        current = c.get_position()
+        for i in range(9):
             dir = dir.rotate_left()
 
             dx, dy = dir.delta()
             if(four_dirs and dx != 0 and dy != 0):
                 continue
 
-            if(c.can_move(self.wallDir)):
+            if(c.can_move(self.wallDir) or c.can_build_road(current.add(self.wallDir))):
                 self.wallDir = dir
                 return dir
 
@@ -91,12 +92,13 @@ class BugNav:
     dvd = None
     dirs = [Direction.NORTH, Direction.NORTHEAST, Direction.NORTHWEST, Direction.WEST, Direction.EAST, Direction.SOUTHEAST, Direction.SOUTH, Direction.SOUTHWEST]
     def moveDvD(self, c: Controller):
+        current = c.get_position()
         if(self.dvd is None):
             self.dvd = random.choice(self.dirs)
         
-        if(c.can_move(self.dvd)):
+        if(c.can_move(self.dvd) or c.can_build_road(current.add(self.dvd))):
             return self.dvd
         
-        self.dvd = random.choices(self.dirs)
+        self.dvd = random.choice(self.dirs)
         return self.dvd
 

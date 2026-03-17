@@ -3,7 +3,7 @@ from cambc import Controller, Direction, EntityType, Environment, Position
 def run_core(self, c: Controller):
         # Spawn a builder on an empty core tile
     ident_near_ores(c)
-    for i in range(9):
+    if self.num_spawned < 2:
         pos = c.get_position()  # centre of the 3x3 core
         for dx in range(-1, 2):
             for dy in range(-1, 2):

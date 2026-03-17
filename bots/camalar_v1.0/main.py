@@ -22,12 +22,21 @@ DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
 
 class Player:
     def __init__(self):
+        # Core Vars
         self.num_spawned = 0 # number of builder bots spawned so far (core)
+
+        # Builder Vars
         self.navegador = bugnav.BugNav()
+        self.spawn = None
+        self.conveyor_mode = False
+        self.objetivos = []
+
 
     def run(self, ct: Controller) -> None:
         etype = ct.get_entity_type()
         if etype == EntityType.CORE:
             run_core(self, ct)
         elif etype == EntityType.BUILDER_BOT:
+            if(self.spawn is None): 
+                self.spawn = ct.get_position()
             run_builder(self, ct)
