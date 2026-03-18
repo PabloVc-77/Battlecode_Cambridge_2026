@@ -35,6 +35,13 @@ def run_builder(self, c: Controller):
         elif(math.sqrt(current.distance_squared(target)) >= math.sqrt(2)):
             if c.can_build_conveyor(move_pos, siguiente_dir.opposite()):
                 c.build_conveyor(move_pos, siguiente_dir.opposite())
+            else:
+                estructura = c.get_tile_building_id(move_pos)
+                if c.get_entity_type(estructura) == EntityType.ROAD and c.can_destroy(move_pos):
+                    c.destroy(move_pos)
+                    if c.can_build_conveyor(move_pos, siguiente_dir.opposite()):
+                        c.build_conveyor(move_pos, siguiente_dir.opposite())
+
             if c.can_move(siguiente_dir):
                 c.move(siguiente_dir)
         else:

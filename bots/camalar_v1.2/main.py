@@ -28,6 +28,7 @@ class Player:
     def __init__(self):
         # Core Vars
         self.num_spawned = 0 # number of builder bots spawned so far (core)
+        self.num_tbuilders = 0 # numero de builders torreta
 
         # Builder Vars
         self.navegador = bugnav.BugNav()
@@ -44,6 +45,13 @@ class Player:
         self.my_core = None
         self.simetry = 0
         self.enemy_core = []
+        self.enemy_core_adjacent = []
+        
+        self.analysis_tile = 0        
+        self.analysis_mode = -1
+
+        # Builder_Defensivo Vars
+        # self.my_core
 
 
     def run(self, ct: Controller) -> None:
@@ -53,7 +61,7 @@ class Player:
         elif etype == EntityType.BUILDER_BOT:
             if(self.spawn is None): # primera ronda de su vida
                 self.spawn = ct.get_position()
-                if ct.get_current_round() == 50:
+                if ct.get_current_round() >= 50 and ct.get_current_round() <= 100:
                     self.builder_type = BUILDERS[1] # torreta
                 elif ct.get_current_round() == 5:
                     self.builder_type = BUILDERS[2] # defensivo
