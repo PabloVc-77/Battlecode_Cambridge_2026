@@ -16,13 +16,13 @@ from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
 from botRolex.builder import run_builder
 from botRolex.builderTorretas import run_builder_torretas
-from botRolex.kamikaze import run_kamikaze
+from botRolex.defensivo import run_defensivo
 import bugnav4_opus as bugnav
 
 # non-centre directions
 DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
 # types of builder bots
-BUILDERS = ["normal", "torreta", "kamikaze"]
+BUILDERS = ["normal", "torreta", "defensivo"]
 
 class Player:
     def __init__(self):
@@ -39,18 +39,22 @@ class Player:
         # Type of Builder
         self.builder_type = None
 
+        # Builder_Torretas Vars
+        self.core_pos = None
+        self.my_core = None
+
 
     def run(self, ct: Controller) -> None:
         etype = ct.get_entity_type()
         if etype == EntityType.CORE:
             run_core(self, ct)
         elif etype == EntityType.BUILDER_BOT:
-            if(self.spawn is None): #primera ronda de su vida
+            if(self.spawn is None): # primera ronda de su vida
                 self.spawn = ct.get_position()
                 if ct.get_current_round() == 50:
-                    self.builder_type = BUILDERS[1] # normal
-                elif ct.get_current_round() == 51:
-                    self.builder_type = BUILDERS[2] # torreta
+                    self.builder_type = BUILDERS[1] # torreta
+                elif ct.get_current_round() == 5:
+                    self.builder_type = BUILDERS[2] # defensivo
                 else:
                     self.builder_type = BUILDERS[0] # normal
             if self.builder_type == BUILDERS[0]:
@@ -58,4 +62,4 @@ class Player:
             elif self.builder_type == BUILDERS[1]:
                 run_builder_torretas(self, ct)
             elif self.builder_type == BUILDERS[2]:
-                run_kamikaze(self, ct)
+                run_defensivo(self, ct)
