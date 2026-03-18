@@ -2,7 +2,6 @@ from operator import pos
 
 from cambc import Controller, Direction, EntityType, Environment, Position
 import math
-import bugnav4_opus as bugnav
 
 
 #get_tile_env(pos: Position) == None
@@ -16,7 +15,7 @@ def run_defensivo(self, c: Controller):
         if  c.get_entity_type(nodeID) == EntityType.CORE:
             nodePosition =c.get_position(nodeID)
             break
-    direc = c.bugnav.moveTo(self, nodePosition, four_dirs= False)  
+    direc = self.navegador.moveTo(self, nodePosition, four_dirs= False)  
     c.get_position().add(direc)
     
     

@@ -40,8 +40,10 @@ class Player:
         self.builder_type = None
 
         # Builder_Torretas Vars
-        self.core_pos = None
+        self.enemy_core_pos = None
         self.my_core = None
+        self.simetry = 0
+        self.enemy_core = []
 
 
     def run(self, ct: Controller) -> None:
@@ -57,6 +59,7 @@ class Player:
                     self.builder_type = BUILDERS[2] # defensivo
                 else:
                     self.builder_type = BUILDERS[0] # normal
+
             if self.builder_type == BUILDERS[0]:
                 run_builder(self, ct)
             elif self.builder_type == BUILDERS[1]:
