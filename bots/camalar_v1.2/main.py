@@ -17,7 +17,7 @@ from botRolex.core import run_core
 from botRolex.builder import run_builder
 from botRolex.builderTorretas import run_builder_torretas
 from botRolex.defensivo import run_defensivo
-import bugnav4_opus as bugnav
+import bignav_opus as bugnav
 
 # non-centre directions
 DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
@@ -61,7 +61,7 @@ class Player:
         elif etype == EntityType.BUILDER_BOT:
             if(self.spawn is None): # primera ronda de su vida
                 self.spawn = ct.get_position()
-                if ct.get_current_round() >= 50 and ct.get_current_round() <= 100:
+                if ct.get_current_round() == 1 and ct.get_current_round() <= 100:
                     self.builder_type = BUILDERS[1] # torreta
                 elif ct.get_current_round() == 5:
                     self.builder_type = BUILDERS[2] # defensivo

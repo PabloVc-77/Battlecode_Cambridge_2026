@@ -30,8 +30,9 @@ def run_defensivo(self, c: Controller):
     obj = None
     if len(circulo) > 0:
         obj = circulo[0]
-
+    c.draw_indicator_dot( obj, 186,227, 0)
     if obj is not None:
+        cdir = obj.direction_to(nodePosition)
         if c.can_build_conveyor(obj, obj.direction_to(nodePosition)):
             c.build_conveyor(obj, obj.direction_to(nodePosition))
         else:

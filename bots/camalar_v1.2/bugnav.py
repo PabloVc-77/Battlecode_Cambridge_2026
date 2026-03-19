@@ -62,13 +62,6 @@ class BugNav:
             self.visitedStates.clear()
         
         c.draw_indicator_dot(current, 245, 63, 39)
-        # Detectar Bucle
-        #stateKey = (current.x, current.y, self.wallDir)
-        #if(stateKey in self.visitedStates):
-            # Process Giving UP
-         #   return Direction.CENTRE
-        #self.visitedStates.add(stateKey)
-        
         self.wallDir = current.direction_to(goal)
         nextDir = self.followWall(c, four_dirs=four_dirs)
 
@@ -121,8 +114,12 @@ class BugNav:
                 continue
 
             if(c.can_move(dir) or c.can_build_road(current.add(dir))):
-                self.wallDir = dir
-                self.prevWallDir = dir
+                pared = current.add(self.wallDir).add(dir)
+                if c.is_tile_empty(pared) or c.is_tile_passable(pared):
+                    # La pared no esta donde se esperaba
+                    self.wallDir = current.add(dir).direction_to(current.add(self.prevWallDir))
+                
+                self.prevWallDir = self.wallDir
                 return dir
 
         return Direction.CENTRE
