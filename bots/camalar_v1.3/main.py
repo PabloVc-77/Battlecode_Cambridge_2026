@@ -56,6 +56,8 @@ class Player:
         self.splitter_pos = None
         self.furnace_pos = None
         self.fase2 = False
+        self.fase2 = 0
+        self.replace = []
 
 
     def run(self, ct: Controller) -> None:
