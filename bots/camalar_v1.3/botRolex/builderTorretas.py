@@ -73,20 +73,30 @@ def find_enemy_tile(self, c: Controller):
     pass
 def place_torreta(self, c: Controller):
     # Poner torreta
-    # Escanear las 16 casillas alrededor del core enemigo
-    for pos in self.enemy_core_adjacent:
-        coreDir = pos.direction_to(self.enemy_core_pos)
-        if c.can_build_gunner(pos,coreDir):
-            c.build_gunner(pos,coreDir)
-            return
-        elif c.get_position().distance_squared(pos) >= 2:
-            dir = self.navegador.moveTo(c,pos,False)
-            if c.can_build_road(c.get_position().add(dir)):
-                c.build_road(c.get_position().add(dir))
-            if c.can_move(dir):
-                c.move(dir)
-            return
-    # Si hay una casilla vacia con rail conectado a esa casilla, poner torreta
-    # Si no, si alguna de las 16 es un rail que esta conectado a otro rail, romper rail
-    # Si no, poner torreta en casilla vacia
+    # Escanear las 16 casillas alrededor del core enemigo y moverse por ellas
+    try:
+        for pos in self.enemy_core_adjacent:
+            if c.is_in_vision(pos):
+                posID = c.get_tile_building_id(pos)
+            coreDir = pos.direction_to(self.enemy_core_pos)
+            if c.can_build_gunner(pos,coreDir):
+                c.build_gunner(pos,coreDir)
+                return
+            elif c.get_position().distance_squared(pos) >= 2:
+                dir = self.navegador.moveTo(c,pos,False)
+                if c.can_build_road(c.get_position().add(dir)):
+                    c.build_road(c.get_position().add(dir))
+                if c.can_move(dir):
+                    c.move(dir)
+                return
+            
+            if c.get_stored_resource(posID) is not None:
+                c.self_destruct()
+                return
+        # Si hay una casilla vacia con rail conectado a esa casilla, poner torreta
+        # Si no, si alguna de las 16 es un rail que esta conectado a otro rail, romper rail
+        # Si no, poner torreta en casilla vacia
+    except Exception as e:
+        return
+
     pass

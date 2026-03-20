@@ -9,20 +9,35 @@ def run_core(self, c: Controller):
       #      self.num_tbuilders += 1
 
     if self.num_spawned < 5:
-        spawnBuilder(self, c)
+        spawnBuilder(c)
+        self.num_spawned += 1
         
     recursos = c.get_global_resources()
-    if 1 * c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0] + c.get_foundry_cost()[0] <= recursos[0]: 
-        spawnBuilder(self, c)
 
-def spawnBuilder(self, c:Controller):
+    limite = 0
+    flag = False
+    buildings = c.get_nearby_buildings()
+    for b in buildings:
+        if c.get_entity_type(b) == EntityType.FOUNDRY:
+            flag = True
+            break
+        
+    if flag:
+        limite = c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0]
+    else:
+        limite = c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0] + c.get_foundry_cost()[0]
+
+    if limite <= recursos[0] and c.get_current_round() >= 100: 
+        spawnBuilder(c)
+        self.num_spawned += 1
+
+def spawnBuilder(c:Controller):
     pos = c.get_position()  # centre of the 3x3 core
     for dx in range(-1, 2):
         for dy in range(-1, 2):
             target = Position(pos.x + dx, pos.y + dy)
             if c.can_spawn(target):
                 c.spawn_builder(target)
-                self.num_spawned += 1
                 return True
     return False
 

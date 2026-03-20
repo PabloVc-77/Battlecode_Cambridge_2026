@@ -45,6 +45,9 @@ def run_defensivo(self, c: Controller):
     obj = None
     if len(circulo) > 0:
         obj = circulo[0]
+    else:
+        #obtener_anillo_16_casilla(c, nodePosition)
+        pass
     
     if obj is not None:
         c.draw_indicator_dot( obj, 186, 227, 0)
@@ -79,6 +82,25 @@ def is_there_axionite(c: Controller, centro: Position):
                         material = c.get_stored_resource(conveyor)
                         if material is not None and material.name == "RAW_AXIONITE":
                             casillas_validas.append(pos)
+                    
+    return casillas_validas
+
+def obtener_anillo_16_casilla(c: Controller, centro: Position):
+    cx = centro.x
+    cy = centro.y
+    casillas_validas = []
+
+    # Recorremos un área de 5x5 alrededor del centro (desde -2 hasta +2)
+    for dx in range(-2, 3):
+        for dy in range(-2, 3):
+            # TRUCO: Si la distancia máxima en x o en y es exactamente 2, 
+            # significa que estamos en el borde exterior (las 16 casillas que quieres).
+            if max(abs(dx), abs(dy)) == 2:
+                pos = Position(cx + dx, cy + dy)
+                # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
+                conveyor = c.get_tile_building_id(pos)
+                if c.get_direction(conveyor):
+                    casillas_validas.append(pos)
                     
     return casillas_validas
 
