@@ -7,6 +7,16 @@ def _is_diagonal(d: Direction) -> bool:
     dx, dy = d.delta()
     return dx != 0 and dy != 0
 
+def _can_i_move(c: Controller, d: Direction):
+    current = c.get_position()
+    nextPos = current.add(d)
+    w = c.get_map_width()
+    h = c.get_map_height()
+
+    if(nextPos.x >= 0 and nextPos.x < w and nextPos.y >= 0 and nextPos.y < h):
+        return c.can_move(d) or c.is_tile_empty(nextPos) or c.is_tile_passable(nextPos)
+    return False
+
 
 class BugNav:
     def __init__(self):
@@ -24,7 +34,7 @@ class BugNav:
 
         # M-line tolerance — más amplia para cubrir pasos diagonales
         # Un paso diagonal sobre una línea recta puede desviarse hasta ~0.7
-        self.mline_epsilon = 0.5
+        self.mline_epsilon = 0.25
 
         # Anti-oscillation
         self.lastLeaveDist = float("inf")
@@ -71,8 +81,17 @@ class BugNav:
         if self.mode == "GOAL":
             dir_to_goal = current.direction_to(goal)
 
-            if c.can_move(dir_to_goal) or c.can_build_road(current.add(dir_to_goal)):
+            flag = False
+            if(four_dirs and _is_diagonal(dir_to_goal)):
+                flag = True
+                dir_to_goal = dir_to_goal.rotate_left()
+
+            if _can_i_move(c, dir_to_goal):
                 return dir_to_goal
+            elif(flag):
+                dir_to_goal = dir_to_goal.rotate_right().rotate_right()
+                if _can_i_move(c, dir_to_goal):
+                    return dir_to_goal
 
             # Chocamos → iniciar wall following
             self.mode = "WALL"
@@ -154,7 +173,7 @@ class BugNav:
             d = dir.rotate_left().rotate_left()   # arranca 90° izq
             for _ in range(7):
                 if not (four_dirs and _is_diagonal(d)):
-                    if c.can_move(d) or c.can_build_road(current.add(d)):
+                    if _can_i_move(c, d):
                         self.prevWallDir = d
                         return d
                 d = d.rotate_right()
@@ -162,15 +181,44 @@ class BugNav:
             d = dir.rotate_right().rotate_right()  # arranca 90° der
             for _ in range(7):
                 if not (four_dirs and _is_diagonal(d)):
-                    if c.can_move(d) or c.can_build_road(current.add(d)):
+                    if _can_i_move(c, d):
                         self.prevWallDir = d
                         return d
                 d = d.rotate_left()
 
         return Direction.CENTRE
 
+    def _wall_priority(self, wall_dir: Direction, left_hand: bool) -> list:
+        """
+        Dado que la pared está en wall_dir, devuelve las direcciones
+        ordenadas de más pegada a la pared a más alejada.
+        Left-hand: gira preferentemente a la izquierda de la pared.
+        Right-hand: gira preferentemente a la derecha.
+        """
+        # Diagonales "pegadas" a la pared (tocan wall_dir)
+        diag_left  = wall_dir.rotate_left()   # 45° izq de la pared
+        diag_right = wall_dir.rotate_right()  # 45° der de la pared
+
+        # Perpendiculares (90° respecto a la pared)
+        perp_left  = wall_dir.rotate_left().rotate_left()   # 90° izq
+        perp_right = wall_dir.rotate_right().rotate_right() # 90° der
+
+        # Diagonales de huida (135°)
+        escape_left  = perp_left.rotate_left()   # 135° izq
+        escape_right = perp_right.rotate_right() # 135° der
+
+        # Opuesta (180°) — último recurso
+        opposite = wall_dir.rotate_left().rotate_left().rotate_left().rotate_left()
+
+        if left_hand:
+            return [diag_left, diag_right, perp_left, perp_right,
+                    escape_left, escape_right, opposite]
+        else:
+            return [diag_right, diag_left, perp_right, perp_left,
+                    escape_right, escape_left, opposite]
+
     # ==========================
-    # LEAVE CONDITION (Bug2)  ← ahora sí se usa
+    # LEAVE CONDITION (Bug2) 
     # ==========================
     def shouldLeaveWall(self, current: Position, nextPos: Position,
                         goal: Position, c: Controller) -> bool:
@@ -192,16 +240,26 @@ class BugNav:
     # M-LINE CHECK  ← tolerancia ajustada para diagonales
     # ==========================
     def onMline(self, p: Position, c: Controller) -> bool:
-        if self.start is None or self.prevGoal is None:
-            return False
+        # Distancia perpendicular punto-recta (más robusta que d1+d2≈d3)
+        sx, sy = self.start.x, self.start.y
+        gx, gy = self.prevGoal.x, self.prevGoal.y
+        px, py = p.x, p.y
 
-        d1 = math.sqrt(self.start.distance_squared(p))
-        d2 = math.sqrt(p.distance_squared(self.prevGoal))
-        d3 = math.sqrt(self.start.distance_squared(self.prevGoal))
+        dx, dy = gx - sx, gy - sy
+        length_sq = dx*dx + dy*dy
+        if length_sq == 0:
+            return p == self.start
+
+        # Proyección escalar sobre la M-line
+        t = ((px - sx)*dx + (py - sy)*dy) / length_sq
+        # Punto más cercano en la línea
+        closest_x = sx + t*dx
+        closest_y = sy + t*dy
+
+        dist_perp = math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
 
         c.draw_indicator_line(self.start, self.prevGoal, 228, 245, 39)
-
-        return abs((d1 + d2) - d3) < self.mline_epsilon
+        return dist_perp < 0.6  # tolerancia perpendicular real
 
     # ==========================
     # GREEDY ESCAPE
@@ -214,7 +272,7 @@ class BugNav:
         best_dist = current.distance_squared(goal)
 
         for d in dirs_list:
-            if c.can_move(d) or c.can_build_road(current.add(d)):
+            if _can_i_move(c, d):
                 npos = current.add(d)
                 nd = npos.distance_squared(goal)
                 if nd < best_dist:
@@ -223,7 +281,7 @@ class BugNav:
 
         if best_dir == Direction.CENTRE:
             for d in dirs_list:
-                if c.can_move(d) or c.can_build_road(current.add(d)):
+                if _can_i_move(c, d):
                     return d
 
         return best_dir
@@ -234,12 +292,10 @@ class BugNav:
     dvd = None
 
     def moveDvD(self, c: Controller, four_dirs: bool):
-        current = c.get_position()
-
         if self.dvd is None:
             self.dvd = random.choice(self.fdirs if four_dirs else self.dirs)
 
-        if c.can_move(self.dvd) or c.can_build_road(current.add(self.dvd)):
+        if _can_i_move(c, self.dvd):
             return self.dvd
 
         self.dvd = random.choice(self.fdirs if four_dirs else self.dirs)

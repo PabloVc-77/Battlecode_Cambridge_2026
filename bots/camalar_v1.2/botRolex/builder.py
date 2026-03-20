@@ -13,17 +13,14 @@ def run_builder(self, c: Controller):
     if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) == EntityType.CONVEYOR:
         c.self_destruct()
         return
-    if self.current_target is None or self.current_target not in self.objetivos:
-        if len(self.objetivos) > 0:
-            self.current_target = self.objetivos[0]
-        else:
-            self.current_target = None
 
-    target = self.current_target
+    if len(self.objetivos) > 0:
+        target = self.objetivos[0]
+    else:
+        target = None
 
-
-    if target is not None: c.draw_indicator_line(current, target, 204, 39, 245)
     if  (target is not None):
+        c.draw_indicator_line(current, target, 204, 39, 245)
         siguiente_dir = self.navegador.moveTo(c, target, four_dirs=True)
         move_pos = current.add(siguiente_dir)
         c.draw_indicator_line(current, move_pos, 66, 245, 39)
