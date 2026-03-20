@@ -4,15 +4,17 @@ def run_core(self, c: Controller):
     # Spawn a builder on an empty core tile
     #ident_near_ores(c)
 
-    #if c.get_current_round() >= 50 and c.get_current_round() <= 100 and self.num_tbuilders < 3:
-     #   if spawnBuilder(self, c):
-      #      self.num_tbuilders += 1
+    if c.get_current_round() >= 50 and c.get_current_round() <= 100 and self.num_tbuilders < 3:
+        if spawnBuilder(self, c):
+            self.num_tbuilders += 1
 
     if self.num_spawned < 5:
         spawnBuilder(self, c)
+    elif c.get_current_round() % 35 == 0:  # Example round number, replace with actual condition
+        spawnBuilder(self, c)
         
     recursos = c.get_global_resources()
-    if 1 * c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0] + c.get_foundry_cost()[0] <= recursos[0]: 
+    if 2 * c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0] <= recursos[0]  and c.get_current_round() > 700 : 
         spawnBuilder(self, c)
 
 def spawnBuilder(self, c:Controller):
