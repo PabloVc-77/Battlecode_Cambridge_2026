@@ -141,7 +141,7 @@ def mision_axionite(self, c: Controller, nodePosition: Position):
     
     if(b_id_at_split is not None and c.get_entity_type(b_id_at_split) != EntityType.SPLITTER):
         if c.can_destroy(splitter_pos):
-            if c.get_global_resources()[0] > c.get_splitter_cost()[0] + 10:
+            if c.get_global_resources()[0] > c.get_splitter_cost()[0] and c.get_action_cooldown() == 0:
                 c.destroy(splitter_pos)
         else:
             direc = current.direction_to(splitter_pos)
@@ -162,7 +162,7 @@ def mision_axionite(self, c: Controller, nodePosition: Position):
             self.fase2 += 1
         else:
             r = self.replace[0]
-            if c.can_destroy(r):
+            if c.can_destroy(r) and c.get_global_resources()[0] > c.get_bridge_cost()[0] and c.get_action_cooldown() == 0:
                 c.destroy(r)
             else:
                 build = c.get_tile_building_id(r)

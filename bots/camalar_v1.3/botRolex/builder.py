@@ -10,7 +10,7 @@ def run_builder(self, c: Controller):
     target = None
     entityID = c.get_tile_building_id(current)
     tileTeam = c.get_team(entityID)
-    if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) == EntityType.CONVEYOR:
+    if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) in [EntityType.CONVEYOR, EntityType.BRIDGE, EntityType.SPLITTER]:
         c.self_destruct()
         return
 
