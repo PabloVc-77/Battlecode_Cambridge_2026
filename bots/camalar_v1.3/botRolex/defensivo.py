@@ -104,9 +104,9 @@ def obtener_anillo_16_casillas(c: Controller, centro: Position):
             if max(abs(dx), abs(dy)) == 2:
                 pos = Position(cx + dx, cy + dy)
                 # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
-                if _is_in_bounds(c, pos):
+                if _is_in_bounds(c, pos) and c.is_in_vision(pos):
                     something = c.get_tile_builder_bot_id(pos)
-                    if c.is_in_vision(pos) and (c.is_tile_empty(pos) or c.get_entity_type(something) == EntityType.MARKER):
+                    if c.is_tile_empty(pos) or c.get_entity_type(something) == EntityType.MARKER:
                         casillas_validas.append(pos)
                     
     return casillas_validas
