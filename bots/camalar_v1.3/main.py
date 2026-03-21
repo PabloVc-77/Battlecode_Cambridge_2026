@@ -67,9 +67,10 @@ class Player:
         elif etype == EntityType.BUILDER_BOT:
             if(self.spawn is None): # primera ronda de su vida
                 self.spawn = ct.get_position()
-                if ct.get_current_round() >= 1 and ct.get_current_round() <= 3: # No entra aqui
+                round = ct.get_current_round()
+                if round >= 1 and round <= 3: # No entra aqui
                     self.builder_type = BUILDERS[1] # torreta
-                elif ct.get_current_round() == -1:
+                elif round == -1:
                     self.builder_type = BUILDERS[2] # defensivo
                 else:
                     self.builder_type = BUILDERS[0] # normal

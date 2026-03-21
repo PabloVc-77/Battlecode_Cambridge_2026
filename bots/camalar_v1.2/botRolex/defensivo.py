@@ -104,8 +104,10 @@ def obtener_anillo_16_casillas(c: Controller, centro: Position):
             if max(abs(dx), abs(dy)) == 2:
                 pos = Position(cx + dx, cy + dy)
                 # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
-                if c.is_in_vision(pos) and _is_in_bounds(c, pos) and c.is_tile_empty(pos):
-                    casillas_validas.append(pos)
+                if _is_in_bounds(c, pos):
+                    something = c.get_tile_builder_bot_id(pos)
+                    if c.is_in_vision(pos) and (c.is_tile_empty(pos) or c.get_entity_type(something) == EntityType.MARKER):
+                        casillas_validas.append(pos)
                     
     return casillas_validas
 
@@ -145,23 +147,27 @@ def mision_axionite(self, c: Controller, nodePosition: Position):
             if(c.can_move(direc)):
                 c.move(direc)
     elif b_id_at_split is None:
-        if len(self.replace) == 0:
-            check_surrounding_conveyors(self, c, splitter_pos, splitter_dir)
-
-        if c.can_build_splitter(splitter_pos, splitter_dir):
-            c.build_splitter(splitter_pos, splitter_dir)
+        if c.get_entity_type(b_id_at_split) == EntityType.SPLITTER:
             self.fase2 += 1
-    
+        else:
+            if len(self.replace) == 0:
+                check_surrounding_conveyors(self, c, splitter_pos, splitter_dir)
+
+            if c.can_build_splitter(splitter_pos, splitter_dir):
+                c.build_splitter(splitter_pos, splitter_dir)
+                self.fase2 += 1
+        
     if self.fase2 == 1:
         if len(self.replace) == 0:
             self.fase2 += 1
         else:
             r = self.replace[0]
-            if c.can_destroy(r):
+            place = c.get_tile_building_id(r)
+            if c.can_destroy(r) and place is not None and c.get_entity_type(place) != EntityType.BRIDGE:
                 c.destroy(r)
             else:
                 build = c.get_tile_building_id(r)
-                if build is not None and c.get_team(build) != c.get_team():
+                if build is not None and (c.get_team(build) != c.get_team() or c.get_entity_type(build) == EntityType.BRIDGE):
                     self.replace.pop()
                 else:
                     dir = self.navegador.moveTo(c, r, False)
