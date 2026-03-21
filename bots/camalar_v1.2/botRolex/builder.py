@@ -24,7 +24,7 @@ def run_builder(self, c: Controller):
         siguiente_dir = self.navegador.moveTo(c, target, four_dirs=True)
         move_pos = current.add(siguiente_dir)
         c.draw_indicator_line(current, move_pos, 66, 245, 39)
-        if c.can_build_harvester(target):
+        if c.can_build_harvester(target) and current.distance_squared(target) < 2:
             c.build_harvester(target)
             if target in self.objetivos:
                 self.objetivos.remove(target)
