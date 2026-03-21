@@ -147,27 +147,23 @@ def mision_axionite(self, c: Controller, nodePosition: Position):
             if(c.can_move(direc)):
                 c.move(direc)
     elif b_id_at_split is None:
-        if c.get_entity_type(b_id_at_split) == EntityType.SPLITTER:
-            self.fase2 += 1
-        else:
-            if len(self.replace) == 0:
-                check_surrounding_conveyors(self, c, splitter_pos, splitter_dir)
+        if len(self.replace) == 0:
+            check_surrounding_conveyors(self, c, splitter_pos, splitter_dir)
 
-            if c.can_build_splitter(splitter_pos, splitter_dir):
-                c.build_splitter(splitter_pos, splitter_dir)
-                self.fase2 += 1
-        
+        if c.can_build_splitter(splitter_pos, splitter_dir):
+            c.build_splitter(splitter_pos, splitter_dir)
+            self.fase2 += 1
+    
     if self.fase2 == 1:
         if len(self.replace) == 0:
             self.fase2 += 1
         else:
             r = self.replace[0]
-            place = c.get_tile_building_id(r)
-            if c.can_destroy(r) and place is not None and c.get_entity_type(place) != EntityType.BRIDGE:
+            if c.can_destroy(r):
                 c.destroy(r)
             else:
                 build = c.get_tile_building_id(r)
-                if build is not None and (c.get_team(build) != c.get_team() or c.get_entity_type(build) == EntityType.BRIDGE):
+                if build is not None and c.get_team(build) != c.get_team():
                     self.replace.pop()
                 else:
                     dir = self.navegador.moveTo(c, r, False)
