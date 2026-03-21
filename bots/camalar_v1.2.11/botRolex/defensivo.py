@@ -15,6 +15,23 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
 
     return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
 
+def _conveyor_dir_to_core(tile: Position, core_pos: Position) -> Direction:
+    """
+    Devuelve la dirección cardinal en la que una conveyor en `tile`
+    debe apuntar para dirigirse hacia `core_pos`.
+    """
+    dx = core_pos.x - tile.x
+    dy = core_pos.y - tile.y
+
+    if dx == 0 and dy == 0:
+        return Direction.CENTRE
+
+    # Eje dominante — si empate, preferir eje x (arbitrario, ajusta si quieres)
+    if abs(dx) >= abs(dy):
+        return Direction.EAST if dx > 0 else Direction.WEST
+    else:
+        return Direction.SOUTH if dy > 0 else Direction.NORTH
+
 def run_defensivo(self, c: Controller):
 
     if(self.my_core is None):
@@ -42,12 +59,11 @@ def run_defensivo(self, c: Controller):
         if self.splitter_pos is None:
             self.splitter_pos = entradas[0]
         mision_axionite(self, c, nodePosition)
-        if (self.fase2 is not None and self.fase2 < 2) or c.get_global_resources()[0] >= c.get_foundry_cost()[0] - 20:
+        if (self.fase2 is not None and self.fase2 < 2 and c.get_global_resources()[0] >= c.get_splitter_cost()[0] + 15) or c.get_global_resources()[0] >= c.get_foundry_cost()[0] - 20:
             return
 
 
-    circulo = obtener_anillo_16_casillas(c, nodePosition)
-    circulo = sorted(circulo, key=lambda p: c.get_position().distance_squared(p))
+    circulo = obtener_anillo_16_casillas(self, c, nodePosition)
     obj = None
     if len(circulo) > 0:
         obj = circulo[0]
@@ -57,11 +73,14 @@ def run_defensivo(self, c: Controller):
     
     if obj is not None:
         c.draw_indicator_dot( obj, 186, 227, 0)
-        cdir = obj.direction_to(nodePosition)
-        if _is_diagonal(cdir):
-            cdir = cdir.rotate_left()
-            
-        if c.can_build_conveyor(obj, cdir):
+        cdir = _conveyor_dir_to_core(obj, nodePosition)
+
+        if c.can_destroy(obj):
+            c.destroy(obj)
+
+        if c.can_build_armoured_conveyor(obj, cdir):
+            c.build_armoured_conveyor(obj, cdir)
+        elif c.can_build_conveyor(obj, cdir):
             c.build_conveyor(obj, cdir)
         else:
             direc = current.direction_to(obj)
@@ -91,10 +110,14 @@ def is_there_axionite(c: Controller, centro: Position):
                     
     return casillas_validas
 
-def obtener_anillo_16_casillas(c: Controller, centro: Position):
+def obtener_anillo_16_casillas(self, c: Controller, centro: Position):
     cx = centro.x
     cy = centro.y
     casillas_validas = []
+
+    furnace = None
+    if self.furnace_pos is not None:
+        furnace = c.get_tile_builder_bot_id(self.furnace_pos)
 
     # Recorremos un área de 5x5 alrededor del centro (desde -2 hasta +2)
     for dx in range(-2, 3):
@@ -105,9 +128,21 @@ def obtener_anillo_16_casillas(c: Controller, centro: Position):
                 pos = Position(cx + dx, cy + dy)
                 # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
                 if _is_in_bounds(c, pos) and c.is_in_vision(pos):
-                    something = c.get_tile_builder_bot_id(pos)
-                    if c.is_tile_empty(pos) or c.get_entity_type(something) == EntityType.MARKER:
+                    something = c.get_tile_building_id(pos)
+                    if c.is_tile_empty(pos) or c.get_entity_type(something) in (EntityType.MARKER, EntityType.ROAD):
+                        if c.get_entity_type(something) == EntityType.ROAD and c.get_team(something) != c.get_team():
+                            continue
+                        
                         casillas_validas.append(pos)
+                    elif self.furnace_pos is not None and c.is_in_vision(self.furnace_pos) and c.get_entity_type(furnace) == EntityType.FOUNDRY and c.get_entity_type(something) in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                        dir_conv = c.get_direction(something)
+                        if not _is_diagonal(dir_conv) and dir_conv != pos.direction_to(self.furnace_pos):
+                            casillas_validas.append(pos)
+
+    casillas_validas.sort(key=lambda p: centro.distance_squared(p))
+
+    for w in casillas_validas:
+        c.draw_indicator_dot(w, 245, 39, 204)
                     
     return casillas_validas
 
@@ -149,7 +184,7 @@ def mision_axionite(self, c: Controller, nodePosition: Position):
     
     if(b_id_at_split is not None and c.get_entity_type(b_id_at_split) != EntityType.SPLITTER):
         if c.can_destroy(splitter_pos):
-            if c.get_global_resources()[0] > c.get_splitter_cost()[0] + 2*c.get_bridge_cost()[0] and c.get_action_cooldown() == 0:
+            if c.get_global_resources()[0] > c.get_splitter_cost()[0] and c.get_action_cooldown() == 0:
                 c.destroy(splitter_pos)
         else:
             direc = current.direction_to(splitter_pos)
