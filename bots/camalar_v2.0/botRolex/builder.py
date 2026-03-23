@@ -264,8 +264,8 @@ def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Contro
     builds = c.get_nearby_buildings()
     bridges = list(filter(lambda b: c.get_team(b) == c.get_team() and c.get_entity_type(b) == EntityType.BRIDGE, builds))
 
-    if best_score is not None:
-        best_score = -best_score[0]
+    if best is not None:
+        best_score = best.distance_squared(target)
     else:
         best_score = -1
 
@@ -276,7 +276,9 @@ def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Contro
         end_point = c.get_bridge_target(b)
         remaining_sq = end_point.distance_squared(target)
         end = c.get_position(b)
-        if best_score + 2 >= remaining_sq and c.get_position().distance_squared(end) <= 9:
+        c.draw_indicator_dot(end, 245, 73, 39)
+        c.draw_indicator_line(end, end_point, 245, 73, 39)
+        if best_score >= remaining_sq and place.distance_squared(end) <= 9:
             best_score = remaining_sq
             best = end
 
