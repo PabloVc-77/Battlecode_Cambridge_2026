@@ -124,7 +124,7 @@ def obtener_anillo_16_casillas(self, c: Controller, centro: Position):
         for dy in range(-2, 3):
             # TRUCO: Si la distancia máxima en x o en y es exactamente 2, 
             # significa que estamos en el borde exterior (las 16 casillas que quieres).
-            if max(abs(dx), abs(dy)) == 2:
+            if max(abs(dx), abs(dy)) == 2 and abs(dx) != abs(dy):
                 pos = Position(cx + dx, cy + dy)
                 # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
                 if _is_in_bounds(c, pos) and c.is_in_vision(pos):

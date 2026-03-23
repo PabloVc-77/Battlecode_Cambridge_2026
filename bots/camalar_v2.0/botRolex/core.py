@@ -11,7 +11,7 @@ def run_core(self, c: Controller):
         spawnBuilder(c)
         self.num_spawned += 1
 
-    if self.num_spawned < 4:
+    if self.num_spawned < 2:
         spawnBuilder(c)
         self.num_spawned += 1
         

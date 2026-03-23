@@ -19,6 +19,10 @@ def run_builder(self, c: Controller):
         # go home
         bridgeHome(self, c)
         return
+    elif self.mode == 3:
+        # Revisar camino a casa
+        revisar_camino_casa(self, c)
+        return
 
     oreCerca(self, c)
     current = c.get_position()
@@ -112,11 +116,11 @@ def place_bridge_ore(self, c: Controller):
                 c.move(dir)
 
     self.end_bridges.sort(key=lambda p: place.distance_squared(p))  # ordenar desde place, no current
-    end = _find_viable_bridge_end(place, self.end_bridges, c)
+    end = _find_viable_bridge_end(self.end_bridges, place, self.end_bridges, c)
     if end is None:
         self.mode = 0  # ningún destino válido, volver a buscar ore
         return
-    
+
     c.draw_indicator_dot(end, 255, 255, 255)
     if c.can_build_bridge(place, end):
         c.build_bridge(place, end)
@@ -126,22 +130,19 @@ def place_bridge_ore(self, c: Controller):
         if end in self.end_bridges:
             self.mode = 0
             self.last_bridge_end = None
+        elif c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE:
+            self.mode = 3
+
 
 def bridgeHome(self, c: Controller):
     current = c.get_position()
     bridge_end = self.last_bridge_end
 
-    if bridge_end is not None and bridge_end.distance_squared(self.spawn) <= 2:
+    if bridge_end is not None and bridge_end in self.end_bridges:
         self.mode = 0
         self.last_bridge_end = None
         return
-
-    # Condición de llegada directa
-    if bridge_end.distance_squared(self.spawn) <= 2:
-        self.mode = 0
-        self.last_bridge_end = None
-        return
-
+    
     # Moverse hasta anchor
     if current != bridge_end and current.distance_squared(bridge_end) > 2:
         dir = self.navegador.moveTo(c, bridge_end, four_dirs=False)
@@ -154,7 +155,7 @@ def bridgeHome(self, c: Controller):
 
     # En anchor — colocar siguiente puente
     self.end_bridges.sort(key=lambda p: bridge_end.distance_squared(p))
-    end = _find_viable_bridge_end(bridge_end, self.end_bridges, c)
+    end = _find_viable_bridge_end(self.end_bridges, bridge_end, self.end_bridges, c)
 
     if end is None:
         dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
@@ -179,6 +180,8 @@ def bridgeHome(self, c: Controller):
         if end in self.end_bridges:
             self.mode = 0
             self.last_bridge_end = None
+        elif c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE:
+            self.mode = 3
 
 def oreCerca(self, c: Controller):
     # lógica para identificar ores aqui
@@ -204,7 +207,7 @@ def oreCerca(self, c: Controller):
     self.objetivos.sort(key=lambda p: current.distance_squared(p))
     pass
 
-def _get_end_of_bridge(place: Position, target: Position, c: Controller) -> Position | None:
+def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Controller) -> Position | None:
     dx = target.x - place.x
     dy = target.y - place.y
     dist_sq = dx * dx + dy * dy
@@ -242,7 +245,7 @@ def _get_end_of_bridge(place: Position, target: Position, c: Controller) -> Posi
                 
                 building_id = c.get_tile_building_id(candidate)
                 if building_id is not None:
-                    if c.get_team(building_id) != c.get_team():
+                    if c.get_team(building_id) != c.get_team() and not c.is_tile_passable(candidate):
                         continue
                     if c.get_entity_type(building_id) not in (EntityType.ROAD,EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER, EntityType.FOUNDRY):
                         continue
@@ -258,16 +261,97 @@ def _get_end_of_bridge(place: Position, target: Position, c: Controller) -> Posi
                 best_score = score
                 best = candidate
 
+    builds = c.get_nearby_buildings()
+    bridges = list(filter(lambda b: c.get_team(b) == c.get_team() and c.get_entity_type(b) == EntityType.BRIDGE, builds))
+
+    if best_score is not None:
+        best_score = -best_score[0]
+    else:
+        best_score = -1
+
+    if best is not None and best in end_bridges:
+        return best
+
+    for b in bridges:
+        end_point = c.get_bridge_target(b)
+        remaining_sq = end_point.distance_squared(target)
+        end = c.get_position(b)
+        if best_score + 2 >= remaining_sq and c.get_position().distance_squared(end) <= 9:
+            best_score = remaining_sq
+            best = end
+
     return best
 
 
-def _find_viable_bridge_end(place: Position, candidates: list, c: Controller) -> Position | None:
+def _find_viable_bridge_end(end_of_bridges, place: Position, candidates: list, c: Controller) -> Position | None:
     """
     Dado `place` y una lista de destinos candidatos (end_bridges ordenados por
     distancia), devuelve el primer end válido, o None si ninguno sirve.
     """
     for target in candidates:
-        end = _get_end_of_bridge(place, target, c)
+        end = _get_end_of_bridge(end_of_bridges, place, target, c)
         if end is not None:
             return end
     return None
+
+
+# MODE 3
+
+def revisar_camino_casa(self, c: Controller):
+    current = c.get_position()
+
+    # Inicializar check_pos si es la primera vez que entramos
+    if self.check_pos is None:
+        self.check_pos = self.last_bridge_end
+
+    if self.check_pos is None:
+        self.mode = 0
+        return
+
+    # ¿Ya llegamos a spawn?
+    if self.check_pos in self.end_bridges:
+        self.mode = 0
+        self.check_pos = None
+        self.last_bridge_end = None
+        return
+
+    c.draw_indicator_dot(self.check_pos, 255, 128, 0)
+
+    # Si no tenemos visión, movernos hacia check_pos
+    if not c.is_in_vision(self.check_pos):
+        dir = self.navegador.moveTo(c, self.check_pos, four_dirs=False)
+        next_pos = current.add(dir)
+        if c.can_build_road(next_pos):
+            c.build_road(next_pos)
+        if c.can_move(dir):
+            c.move(dir)
+        return
+
+    # Tenemos visión — comprobar qué hay en check_pos
+    building_id = c.get_tile_building_id(self.check_pos)
+
+    if building_id is None or c.get_entity_type(building_id) != EntityType.BRIDGE:
+        # Hueco — reconstruir desde aquí
+        self.last_bridge_end = self.check_pos
+        self.check_pos = None
+        self.mode = 2
+        return
+
+    if c.get_team(building_id) != c.get_team():
+        # Puente enemigo — reconstruir desde aquí
+        self.last_bridge_end = self.check_pos
+        self.check_pos = None
+        self.mode = 2
+        return
+
+    # Puente nuestro y válido — avanzar al siguiente eslabón
+    next_check = c.get_bridge_target(building_id)
+
+    if next_check is None:
+        self.last_bridge_end = self.check_pos
+        self.check_pos = None
+        self.mode = 2
+        return
+
+    # Todo bien en este eslabón, avanzar
+    self.check_pos = next_check

@@ -54,7 +54,9 @@ class Player:
             # mode 0: Find Ore
             # mode 1: Place bridge near Ore
             # mode 2: go home
+            # mode 3: revisar estructura
         self.last_bridge_end = None
+        self.check_pos = None
         
         # Type of Builder
         self.builder_type = None
@@ -93,7 +95,7 @@ class Player:
                 
 
                 round = ct.get_current_round()
-                if round >= 200 and round % 2 == 0: # No entra aqui
+                if round == -1 and round % 2 == 0:
                     self.builder_type = BUILDERS[1] # torreta
                 elif round == 1:
                     self.builder_type = BUILDERS[2] # defensivo

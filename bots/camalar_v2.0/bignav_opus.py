@@ -259,7 +259,7 @@ class BugNav:
         dist_perp = math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
 
         c.draw_indicator_line(self.start, self.prevGoal, 228, 245, 39)
-        return dist_perp < 0.6  # tolerancia perpendicular real
+        return dist_perp < 1  # tolerancia perpendicular real
 
     # ==========================
     # GREEDY ESCAPE
