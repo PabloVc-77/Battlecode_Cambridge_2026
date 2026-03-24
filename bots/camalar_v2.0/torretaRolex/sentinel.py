@@ -1,5 +1,4 @@
 from cambc import Controller, Direction, EntityType, Environment, Position
-from cambc._types import GameError
 import math
 
 TORRETAS = [EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER]
@@ -12,7 +11,7 @@ def run_sentinel(self, c: Controller):
         try:
             team = c.get_team(e)
             tipo = c.get_entity_type(e)
-        except GameError:
+        except Exception:
             continue  # entidad ya no existe
         if team != c.get_team() and tipo != EntityType.HARVESTER:
             targets.append(e)
@@ -23,7 +22,7 @@ def run_sentinel(self, c: Controller):
         try:
             pos = c.get_position(e)
             tipo = c.get_entity_type(e)
-        except GameError:
+        except Exception:
             continue  # entidad murió entre iteraciones
 
         if tipo == EntityType.CORE:
@@ -53,7 +52,7 @@ def run_sentinel(self, c: Controller):
 def get_priority(e, c):
     try:
         t = c.get_entity_type(e)
-    except GameError:
+    except Exception:
         return 999
 
     if t == EntityType.HARVESTER:
