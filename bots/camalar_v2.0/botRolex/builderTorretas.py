@@ -23,7 +23,8 @@ def run_builder_torretas(self, c: Controller):
     if self.enemy_core_pos is None:
         find_enemy_core(self, c)
     else:
-        find_harvesters(self, c)
+        #find_harvesters(self, c)
+        pass
 
 
 def find_enemy_core(self, c: Controller):
@@ -73,10 +74,16 @@ def _get_adjacent_eight(pos):
 
 def _choose_turret(self, c: Controller, build_pos, direction):
     """Construye Breach si ve el core enemigo, si no Sentinel. Devuelve True si construyó."""
+    """
     if c.is_in_vision(self.enemy_core_pos) and c.can_build_breach(build_pos, direction):
         c.build_breach(build_pos, direction)
         return True
     elif c.can_build_sentinel(build_pos, direction):
+        c.build_sentinel(build_pos, direction)
+        return True
+    """
+    #de momento solo hago
+    if c.can_build_sentinel(build_pos, direction):
         c.build_sentinel(build_pos, direction)
         return True
     return False

@@ -7,7 +7,7 @@ def run_core(self, c: Controller):
     #if c.get_current_round() >= 50 and c.get_current_round() <= 100 and self.num_tbuilders < 3:
      #   if spawnBuilder(self, c):
       #      self.num_tbuilders += 1
-    if c.get_current_round() >= 300 and c.get_global_resources()[0] / 2 >= c.get_builder_bot_cost()[0]:
+    if c.get_current_round() >= 180 and c.get_unit_count() < 20:
         spawnBuilder(c)
         self.num_spawned += 1
 

@@ -15,7 +15,7 @@ import random
 from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
 from botRolex.builder import run_builder
-from botRolex.builderTorretas import run_builder_torretas
+from botRolex.builderTorretas2 import run_builder_torretas2
 from botRolex.defensivo import run_defensivo
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
@@ -66,11 +66,10 @@ class Player:
         self.my_core = None
         self.simetry = 0
         self.enemy_core = []
-
-        self.estado = "buscar"
-        self.harvester_objetivo = None  # Posición del harvester actual
-        self.casilla_objetivo = None    # Casilla adyacente al harvester donde construir la torreta
-        self.casilla_retroceso = None   # Desde donde construiremos la torreta
+        self.turrets_built = 0
+        self.breach_built = 0
+        self.caminos_objetivo = []
+        self.breach_objetivo_pendiente = None
 
         # Builder_Defensivo Vars
         # self.my_core
@@ -92,10 +91,8 @@ class Player:
                         self.spawn = ct.get_position(b)
                         break
 
-                
-
                 round = ct.get_current_round()
-                if round == -1 and round % 2 == 0:
+                if round >= 180:
                     self.builder_type = BUILDERS[1] # torreta
                 elif round == 1:
                     self.builder_type = BUILDERS[2] # defensivo
@@ -114,10 +111,14 @@ class Player:
                             ct.draw_indicator_dot(v, 245, 73, 39)
                             self.end_bridges.append(v)
 
+            if self.turrets_built >= 3:
+                self.objetivos.clear()  # dejar de buscar harvesters
+                self.builder_type = BUILDERS[0]  # cambiar a builder normal
+
             if self.builder_type == BUILDERS[0]:
                 run_builder(self, ct)
             elif self.builder_type == BUILDERS[1]:
-                run_builder_torretas(self, ct)
+                run_builder_torretas2(self, ct)
             elif self.builder_type == BUILDERS[2]:
                 run_defensivo(self, ct)
         elif etype == EntityType.SENTINEL:

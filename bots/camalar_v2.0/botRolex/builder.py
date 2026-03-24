@@ -187,7 +187,7 @@ def oreCerca(self, c: Controller):
     # lógica para identificar ores aqui
     lista = c.get_nearby_tiles()
     for tile in lista:
-        if c.get_tile_env(tile) in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
+        if c.get_tile_env(tile) == Environment.ORE_TITANIUM or (c.get_tile_env(tile) == Environment.ORE_AXIONITE and c.get_current_round() >= 100):
             #and c.get_tile_building_id(tile) is None:
             building_id = c.get_tile_building_id(tile)
 
