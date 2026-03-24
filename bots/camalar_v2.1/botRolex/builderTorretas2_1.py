@@ -1,12 +1,9 @@
 from operator import pos
 
-from cambc import Controller, Direction, EntityType, Environment, Position, GameConstants
+from cambc import Controller, Direction, EntityType, Environment, Position
 import math
 
-
-############# MAIN #############
-
-def run_builder_torretas(self, c: Controller):
+def run_builder_torretas2(self, c: Controller):
     if self.my_core is None:
         buildings = c.get_nearby_buildings()
         for b in buildings:
@@ -29,39 +26,6 @@ def run_builder_torretas(self, c: Controller):
         #if not find_connected_to_core(self, c): construir breach pegado al core, por hacer
         find_harvesters(self, c)
 
-################################
-
-
-############# CONSTANTES AUXILIARES #############
-
-# Rangos de visión y ataque por tipo de torreta (r²)
-_TURRET_VISION_SQ = {
-    EntityType.SENTINEL: GameConstants.SENTINEL_VISION_RADIUS_SQ,
-    EntityType.BREACH: GameConstants.BREACH_VISION_RADIUS_SQ,
-}
-_TURRET_ATTACK_SQ = {
-    EntityType.SENTINEL: 32,
-    EntityType.BREACH:    5,
-}
-
-# Torretas enemigas que queremos priorizar como objetivo
-_ENEMY_TURRETS = [EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER]
- 
-# Máximo de torretas propias permitidas junto a un mismo harvester
-_MAX_TORRETAS_POR_HARVESTER = 2
- 
-# Direcciones cardinales para buscar casillas adyacentes
-_CARDINALS = [Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST]
-_ALL_DIRS   = [
-    Direction.NORTH, Direction.NORTHEAST, Direction.EAST, Direction.SOUTHEAST,
-    Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST,
-]
-
-##################################################
-
-
-
-############# METODOS AUXILIARES #############
 
 def find_enemy_core(self, c: Controller):
     enemyC = self.enemy_core[self.simetry % 3]
@@ -94,6 +58,21 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
 
     return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
 
+
+# Rangos de visión y ataque por tipo de torreta (r²)
+_TURRET_VISION_SQ = {
+    EntityType.SENTINEL: 32,
+    EntityType.BREACH:   13,
+}
+_TURRET_ATTACK_SQ = {
+    EntityType.SENTINEL: 32,
+    EntityType.BREACH:    5,
+}
+
+# Torretas enemigas que queremos priorizar como objetivo
+_ENEMY_TURRETS = [EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER]
+
+
 def _sentinel_coverage(turret_pos: Position, direction: Direction, enemies: list[Position]) -> int:
     """
     Cuenta cuántos enemigos caen en la franja de ataque de una Sentinel.
@@ -101,27 +80,30 @@ def _sentinel_coverage(turret_pos: Position, direction: Direction, enemies: list
     dentro de attack r²=32. Solo acepta direcciones cardinales.
     """
     dx, dy = direction.delta()
- 
+    # Vector perpendicular a la dirección de disparo
+    perp_x, perp_y = dy, dx  # rotar 90°
+
     count = 0
     for ep in enemies:
         rel_x = ep.x - turret_pos.x
         rel_y = ep.y - turret_pos.y
- 
+
         # Proyección sobre el eje de disparo (debe ser positiva → delante)
         proj_forward = rel_x * dx + rel_y * dy
         if proj_forward <= 0:
             continue
- 
-        # Distancia Chebyshev perpendicular a la línea de disparo
-        perp_chebyshev = abs(rel_x * dy - rel_y * dx)
-        if perp_chebyshev > 1:
+
+        # Proyección sobre el eje perpendicular (debe estar dentro de ±1)
+        proj_perp = abs(rel_x * perp_x + rel_y * perp_y)
+        if proj_perp > 1:
             continue
- 
-        # Dentro del rango de ataque (r²)
+
+        # Dentro del rango de ataque
         if rel_x * rel_x + rel_y * rel_y <= _TURRET_ATTACK_SQ[EntityType.SENTINEL]:
             count += 1
- 
+
     return count
+
 
 def _breach_coverage(turret_pos: Position, direction: Direction, enemies: list[Position]) -> int:
     """
@@ -145,40 +127,8 @@ def _breach_coverage(turret_pos: Position, direction: Direction, enemies: list[P
 
     return count
 
-def _supply_blocked(facing: Direction, supply_pos: Position, turret_pos: Position) -> bool:
-    """
-    Devuelve True si una torreta en turret_pos apuntando a `facing`
-    no podría recibir suministro desde supply_pos.
-    
-    Las torretas diagonales pueden recibir desde los 4 lados → nunca bloqueadas.
-    Las torretas cardinales no pueden recibir desde la dirección de su facing.
-    
-    La dirección "bloqueada" es exactamente `facing`: el tile en esa dirección
-    desde la torreta es el que no puede alimentarla.
-    """
-    dx, dy = facing.delta()
-    # Si es diagonal, puede recibir desde cualquier lado
-    if dx != 0 and dy != 0:
-        return False
-    
-    # Para cardinales: está bloqueada si supply_pos está en la dirección exacta de facing
-    # (es decir, el supply tile es turret_pos + facing_delta * k para k > 0,
-    #  y además está en la misma fila/columna según la dirección)
-    rel_x = supply_pos.x - turret_pos.x
-    rel_y = supply_pos.y - turret_pos.y
-    
-    # ¿El suministro está en la línea de facing?
-    # NORTH (0,-1): misma columna, supply más arriba (rel_y < 0)
-    # SOUTH (0, 1): misma columna, supply más abajo (rel_y > 0)
-    # EAST  (1, 0): misma fila,    supply más a la derecha (rel_x > 0)
-    # WEST  (-1,0): misma fila,    supply más a la izquierda (rel_x < 0)
-    if dx == 0:  # NORTH o SOUTH
-        return rel_x == 0 and (rel_y * dy > 0)
-    else:        # EAST o WEST
-        return rel_y == 0 and (rel_x * dx > 0)
 
-
-def construir_torreta(self, c: Controller, p: Position, e: EntityType, supply_pos : Position) -> bool:
+def construir_torreta(self, c: Controller, p: Position, e: EntityType) -> bool:
     """
     Construye una torreta de tipo `e` en la posición `p` eligiendo la dirección
     que maximice la cobertura sobre torretas enemigas visibles.
@@ -197,7 +147,7 @@ def construir_torreta(self, c: Controller, p: Position, e: EntityType, supply_po
 
     # Recoger edificios enemigos visibles dentro del rango de visión de la torreta
     enemy_turret_positions = []
-    buildings = c.get_nearby_buildings(min(vision_sq, GameConstants.BUILDER_BOT_VISION_RADIUS_SQ)) #evitar que de error
+    buildings = c.get_nearby_buildings(vision_sq)
     for b in buildings:
         try:
             if c.get_team(b) == c.get_team():
@@ -210,8 +160,8 @@ def construir_torreta(self, c: Controller, p: Position, e: EntityType, supply_po
     best_dir = None
 
     if e == EntityType.SENTINEL:
-        # Las 7 direcciones válidas: todas excepto la de suministro
-        candidates = [d for d in _ALL_DIRS if not _supply_blocked(d, supply_pos, p)]
+        # Solo direcciones cardinales tienen sentido para la franja ±1
+        candidates = [Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST]
         best_count = 0
         for d in candidates:
             count = _sentinel_coverage(p, d, enemy_turret_positions)
@@ -220,8 +170,11 @@ def construir_torreta(self, c: Controller, p: Position, e: EntityType, supply_po
                 best_dir = d
 
     elif e == EntityType.BREACH:
-        # Las 7 direcciones válidas: todas excepto la de suministro
-        candidates = [d for d in _ALL_DIRS if not _supply_blocked(d, supply_pos, p)]
+        # Las 8 direcciones son válidas para el cono 180°
+        candidates = [
+            Direction.NORTH, Direction.NORTHEAST, Direction.EAST, Direction.SOUTHEAST,
+            Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST,
+        ]
         best_count = 0
         for d in candidates:
             count = _breach_coverage(p, d, enemy_turret_positions)
@@ -230,13 +183,11 @@ def construir_torreta(self, c: Controller, p: Position, e: EntityType, supply_po
                 best_dir = d
 
     # Si no hay torretas enemigas en rango (best_dir es None o best_count == 0),
-    # Fallback: apuntar al core enemigo, verificando que no bloquea el suministro
+    # apuntar al core enemigo como fallback
     if best_dir is None and self.enemy_core_pos is not None:
-        fallback = p.direction_to(self.enemy_core_pos)
-        if not _supply_blocked(fallback, supply_pos, p):
-            best_dir = fallback
-
-    if best_dir is None:
+        best_dir = p.direction_to(self.enemy_core_pos)
+    elif best_dir is None:
+        # Último recurso: sin información, no construimos
         return False
 
     # Construir la torreta según su tipo
@@ -251,81 +202,31 @@ def construir_torreta(self, c: Controller, p: Position, e: EntityType, supply_po
 
     return False
 
-def _contar_torretas_propias(c: Controller, harvester_pos: Position) -> int:
-    """Cuenta cuántas Sentinels propias hay en las 8 casillas adyacentes al harvester."""
-    count = 0
-    for d in _ALL_DIRS:
-        adj = harvester_pos.add(d)
-        if not _is_in_bounds(c, adj) or not c.is_in_vision(adj):
-            continue
-        bid = c.get_tile_building_id(adj)
-        if bid is not None and c.get_entity_type(bid) == EntityType.SENTINEL and c.get_team(bid) == c.get_team():
-            count += 1
-    return count
- 
-def _buscar_slot_para_torreta(c: Controller, harvester_pos: Position) -> Position | None:
-    """
-    Devuelve la primera casilla adyacente (cardinal) al harvester donde se
-    podría colocar una Sentinel: debe estar en visión, vacía o con road propio,
-    y no ser ore ni wall.
-    Devuelve None si no hay hueco visible.
-    """
-    for d in _CARDINALS:
-        adj = harvester_pos.add(d)
-        if not _is_in_bounds(c, adj) or not c.is_in_vision(adj):
-            continue
-        env = c.get_tile_env(adj)
-        if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
-            continue
-        bid = c.get_tile_building_id(adj)
-        if bid is None:
-            return adj
-        # Road propia: se puede destruir y construir encima
-        if c.get_entity_type(bid) == EntityType.ROAD and c.get_team(bid) == c.get_team():
-            return adj
-    return None
-
-# encontrar harvesters y poner 2 torretas adyacentes
 def find_harvesters(self, c: Controller):
     buildings = c.get_nearby_buildings()
     for b in buildings:
-        harvester_pos = c.get_position(b)
-        # Aceptar harvesters de CUALQUIER equipo sobre titanio
-        if c.get_entity_type(b) != EntityType.HARVESTER:
-            continue
-        if c.get_tile_env(harvester_pos) != Environment.ORE_TITANIUM:
-            continue
-        if harvester_pos in self.objetivos:
-            continue
- 
-        # Solo añadir si aún hay hueco (menos de 2 torretas propias adyacentes)
-        # y existe al menos una casilla visible donde construir
-        torretas = _contar_torretas_propias(c, harvester_pos)
-        if torretas >= _MAX_TORRETAS_POR_HARVESTER:
-            continue
-        slot = _buscar_slot_para_torreta(c, harvester_pos)
-        if slot is None:
-            continue
- 
-        self.objetivos.append(harvester_pos)
- 
-    # Eliminar harvesters que ya alcanzaron el límite o han desaparecido
-    def harvester_completo(hpos):
-        if not c.is_in_vision(hpos):
-            return False  # no sabemos, conservar
-        bid = c.get_tile_building_id(hpos)
-        if bid is None or c.get_entity_type(bid) != EntityType.HARVESTER:
-            return True  # ya no existe el harvester
-        torretas = _contar_torretas_propias(c, hpos)
-        slot = _buscar_slot_para_torreta(c, hpos)
-        return torretas >= _MAX_TORRETAS_POR_HARVESTER or slot is None
- 
-    self.objetivos = [h for h in self.objetivos if not harvester_completo(h)]
- 
-    self.objetivos.sort(key=lambda hpos: (
-        (hpos.x - c.get_position().x) ** 2 + (hpos.y - c.get_position().y) ** 2
+        pos = c.get_position(b)
+        if c.get_entity_type(b) == EntityType.HARVESTER and pos not in self.objetivos and c.get_team(b) != c.get_team():
+            #si el harvester no es de titanium no lo tenemos en cuenta
+            if c.get_tile_env(pos) != Environment.ORE_TITANIUM:
+                continue
+            #mirar si ya hay torretas nuestras alrededor de este harvester
+            hay_torreta = False
+            for dir in Direction:
+                pos_torreta = pos.add(dir)
+                if _is_in_bounds(c, pos_torreta) and c.is_in_vision(pos_torreta):
+                    id = c.get_tile_building_id(pos_torreta)
+                    if c.get_entity_type(id) == EntityType.SENTINEL and c.get_team(id) == c.get_team():
+                        hay_torreta = True
+                        break
+            if not hay_torreta:
+                self.objetivos.append(pos)
+    
+
+    self.objetivos.sort(key=lambda pos: math.sqrt(
+        (pos.x - c.get_position().x) ** 2 + (pos.y - c.get_position().y) ** 2
     ))
- 
+
     if not self.objetivos:
         dir = self.navegador.moveDvD(c, four_dirs=False)
         move_pos = c.get_position().add(dir)
@@ -334,67 +235,48 @@ def find_harvesters(self, c: Controller):
         if c.can_move(dir):
             c.move(dir)
         return
- 
-    objetivo = self.objetivos[0]  # posición del harvester
- 
-    # Debug
+
+    #tenemos objetivos, vamos al más cercano
+    objetivo = self.objetivos[0]
+    
+    moveNext = True
+
+    dist_to = math.sqrt((objetivo.x - c.get_position().x) ** 2 + (objetivo.y - c.get_position().y) ** 2)
+    if dist_to <= 1:
+        tile = c.get_tile_building_id(c.get_position())
+        team = c.get_team(tile)
+        moveNext = False
+        if team != c.get_team():
+            #romper esta casilla
+            if c.can_fire(c.get_position()):
+                c.fire(c.get_position())
+        else:
+            #quitar esta casilla
+            if c.can_destroy(c.get_position()):
+                c.destroy(c.get_position())
+        if c.get_tile_building_id(c.get_position()) == None:
+            moveNext = True
+
+
+    # Debug: línea morada hacia el harvester objetivo
     c.draw_indicator_line(c.get_position(), objetivo, 210, 0, 255)
+    # Debug: línea cyan hacia el core enemigo (una vez conocido)
     c.draw_indicator_line(c.get_position(), self.enemy_core_pos, 0, 220, 255)
- 
-    # Buscar el slot de construcción concreto
-    slot = _buscar_slot_para_torreta(c, objetivo)
-    if slot is None:
-        # Sin hueco visible todavía: acercarse al harvester
+    if moveNext:
         dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
         move_pos = c.get_position().add(dir)
+        prev_pos = c.get_position()
         if c.can_build_road(move_pos):
             c.build_road(move_pos)
         if c.can_move(dir):
             c.move(dir)
-        return
- 
-    current = c.get_position()
-    dist_to_slot = current.distance_squared(slot)
- 
-    if dist_to_slot <= 2:
-        # Estamos junto al slot: destruir road si hace falta y construir
-        bid_slot = c.get_tile_building_id(slot)
-        if bid_slot is not None and c.get_entity_type(bid_slot) == EntityType.ROAD:
-            if c.can_destroy(slot):
-                c.destroy(slot)
-        if construir_torreta(self, c, slot, EntityType.SENTINEL, objetivo):
-            # Comprobar si este harvester ya está completo tras construir
-            torretas = _contar_torretas_propias(c, objetivo)
-            next_slot = _buscar_slot_para_torreta(c, objetivo)
-            if torretas >= _MAX_TORRETAS_POR_HARVESTER or next_slot is None:
-                if objetivo in self.objetivos:
-                    self.objetivos.remove(objetivo)
+
+        #intentar construir torreta en la casilla anterior
+        if construir_torreta(self, c, prev_pos, EntityType.SENTINEL):
+            self.objetivos.pop(0)  # eliminar este objetivo de la lista
             self.turrets_built += 1
-    else:
-        # Navegar hacia el slot
-        dir = self.navegador.moveTo(c, slot, four_dirs=False)
-        move_pos = current.add(dir)
-        prev_pos = current
-        if c.can_build_road(move_pos):
-            c.build_road(move_pos)
-        if c.can_move(dir):
-            c.move(dir)
- 
-        # Oportunidad de construir en prev_pos si está junto al slot
-        if prev_pos.distance_squared(slot) <= 2:
-            bid_slot = c.get_tile_building_id(slot)
-            if bid_slot is not None and c.get_entity_type(bid_slot) == EntityType.ROAD:
-                if c.can_destroy(slot):
-                    c.destroy(slot)
-            if construir_torreta(self, c, slot, EntityType.SENTINEL):
-                torretas = _contar_torretas_propias(c, objetivo)
-                next_slot = _buscar_slot_para_torreta(c, objetivo)
-                if torretas >= _MAX_TORRETAS_POR_HARVESTER or next_slot is None:
-                    if objetivo in self.objetivos:
-                        self.objetivos.remove(objetivo)
-                self.turrets_built += 1
- 
-# (sin usar actualmente)
+
+
 def find_connected_to_core(self, c: Controller):
     DISTANCIA_MAX_AL_CORE_SQ = 25
     my_pos = c.get_position()
@@ -558,5 +440,3 @@ def find_connected_to_core(self, c: Controller):
     if c.can_move(dir):
         c.move(dir)
     return True
-
-##############################################

@@ -15,7 +15,7 @@ import random
 from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
 from botRolex.builder import run_builder
-from botRolex.builderTorretas2_1 import run_builder_torretas
+from botRolex.builderTorretas2 import run_builder_torretas2
 from botRolex.defensivo import run_defensivo
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
@@ -122,7 +122,7 @@ class Player:
             if self.builder_type == BUILDERS[0]:
                 run_builder(self, ct)
             elif self.builder_type == BUILDERS[1]:
-                run_builder_torretas(self, ct)
+                run_builder_torretas2(self, ct)
             elif self.builder_type == BUILDERS[2]:
                 run_defensivo(self, ct)
         elif etype == EntityType.SENTINEL:

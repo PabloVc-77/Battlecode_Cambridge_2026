@@ -100,11 +100,6 @@ def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Contro
 
 def run_builder(self, c: Controller):
     #logica del builder aqui
-
-    current = c.get_position()
-    if c.can_heal(current):
-        c.heal(current)
-
     if self.mode == 1:
         # place bridge near ore
         place_bridge_ore(self, c)
