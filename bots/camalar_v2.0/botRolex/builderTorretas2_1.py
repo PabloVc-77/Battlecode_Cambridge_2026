@@ -31,7 +31,7 @@ def find_enemy_core(self, c: Controller):
     enemyC = self.enemy_core[self.simetry % 3]
 
     # Debug: línea amarilla hacia el objetivo estimado del core enemigo
-    c.draw_indicator_line(c.get_position(), enemyC, 255, 140, 0)
+    c.draw_indicator_line(c.get_position(), enemyC, 255, 220, 0)
 
     dir = self.navegador.moveTo(c, enemyC, False)
     move_pos = c.get_position().add(dir)
@@ -57,6 +57,150 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
     h = c.get_map_height()
 
     return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
+
+
+# Rangos de visión y ataque por tipo de torreta (r²)
+_TURRET_VISION_SQ = {
+    EntityType.SENTINEL: 32,
+    EntityType.BREACH:   13,
+}
+_TURRET_ATTACK_SQ = {
+    EntityType.SENTINEL: 32,
+    EntityType.BREACH:    5,
+}
+
+# Torretas enemigas que queremos priorizar como objetivo
+_ENEMY_TURRETS = [EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER]
+
+
+def _sentinel_coverage(turret_pos: Position, direction: Direction, enemies: list[Position]) -> int:
+    """
+    Cuenta cuántos enemigos caen en la franja de ataque de una Sentinel.
+    La Sentinel dispara en línea ±1 tile perpendicular a su dirección,
+    dentro de attack r²=32. Solo acepta direcciones cardinales.
+    """
+    dx, dy = direction.delta()
+    # Vector perpendicular a la dirección de disparo
+    perp_x, perp_y = dy, dx  # rotar 90°
+
+    count = 0
+    for ep in enemies:
+        rel_x = ep.x - turret_pos.x
+        rel_y = ep.y - turret_pos.y
+
+        # Proyección sobre el eje de disparo (debe ser positiva → delante)
+        proj_forward = rel_x * dx + rel_y * dy
+        if proj_forward <= 0:
+            continue
+
+        # Proyección sobre el eje perpendicular (debe estar dentro de ±1)
+        proj_perp = abs(rel_x * perp_x + rel_y * perp_y)
+        if proj_perp > 1:
+            continue
+
+        # Dentro del rango de ataque
+        if rel_x * rel_x + rel_y * rel_y <= _TURRET_ATTACK_SQ[EntityType.SENTINEL]:
+            count += 1
+
+    return count
+
+
+def _breach_coverage(turret_pos: Position, direction: Direction, enemies: list[Position]) -> int:
+    """
+    Cuenta cuántos enemigos caen en el cono 180° de una Breach.
+    El cono cubre todo el semiplano delantero dentro de attack r²=5.
+    Acepta las 8 direcciones.
+    """
+    dx, dy = direction.delta()
+    count = 0
+    for ep in enemies:
+        rel_x = ep.x - turret_pos.x
+        rel_y = ep.y - turret_pos.y
+
+        dist_sq = rel_x * rel_x + rel_y * rel_y
+        if dist_sq == 0 or dist_sq > _TURRET_ATTACK_SQ[EntityType.BREACH]:
+            continue
+
+        # Producto escalar positivo → en el semiplano delantero
+        if rel_x * dx + rel_y * dy > 0:
+            count += 1
+
+    return count
+
+
+def construir_torreta(self, c: Controller, p: Position, e: EntityType) -> bool:
+    """
+    Construye una torreta de tipo `e` en la posición `p` eligiendo la dirección
+    que maximice la cobertura sobre torretas enemigas visibles.
+
+    Prioridad:
+      1. Dirección que apunte a la mayor cantidad de torretas enemigas en rango.
+      2. Si no hay torretas enemigas visibles, apuntar al core enemigo.
+      3. Fallback: apuntar al core enemigo igualmente.
+
+    Devuelve True si construyó la torreta, False en caso contrario.
+    """
+    if e not in (EntityType.SENTINEL, EntityType.BREACH):
+        return False
+
+    vision_sq = _TURRET_VISION_SQ[e]
+
+    # Recoger edificios enemigos visibles dentro del rango de visión de la torreta
+    enemy_turret_positions = []
+    buildings = c.get_nearby_buildings(vision_sq)
+    for b in buildings:
+        try:
+            if c.get_team(b) == c.get_team():
+                continue
+            if c.get_entity_type(b) in _ENEMY_TURRETS:
+                enemy_turret_positions.append(c.get_position(b))
+        except Exception:
+            continue
+
+    best_dir = None
+
+    if e == EntityType.SENTINEL:
+        # Solo direcciones cardinales tienen sentido para la franja ±1
+        candidates = [Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST]
+        best_count = 0
+        for d in candidates:
+            count = _sentinel_coverage(p, d, enemy_turret_positions)
+            if count > best_count:
+                best_count = count
+                best_dir = d
+
+    elif e == EntityType.BREACH:
+        # Las 8 direcciones son válidas para el cono 180°
+        candidates = [
+            Direction.NORTH, Direction.NORTHEAST, Direction.EAST, Direction.SOUTHEAST,
+            Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST,
+        ]
+        best_count = 0
+        for d in candidates:
+            count = _breach_coverage(p, d, enemy_turret_positions)
+            if count > best_count:
+                best_count = count
+                best_dir = d
+
+    # Si no hay torretas enemigas en rango (best_dir es None o best_count == 0),
+    # apuntar al core enemigo como fallback
+    if best_dir is None and self.enemy_core_pos is not None:
+        best_dir = p.direction_to(self.enemy_core_pos)
+    elif best_dir is None:
+        # Último recurso: sin información, no construimos
+        return False
+
+    # Construir la torreta según su tipo
+    if e == EntityType.SENTINEL:
+        if c.can_build_sentinel(p, best_dir):
+            c.build_sentinel(p, best_dir)
+            return True
+    elif e == EntityType.BREACH:
+        if c.can_build_breach(p, best_dir):
+            c.build_breach(p, best_dir)
+            return True
+
+    return False
 
 def find_harvesters(self, c: Controller):
     buildings = c.get_nearby_buildings()
@@ -128,9 +272,7 @@ def find_harvesters(self, c: Controller):
             c.move(dir)
 
         #intentar construir torreta en la casilla anterior
-        direccion_nexo = prev_pos.direction_to(self.enemy_core_pos)
-        if c.can_build_sentinel(prev_pos, direccion_nexo):
-            c.build_sentinel(prev_pos, direccion_nexo)
+        if construir_torreta(self, c, prev_pos, EntityType.SENTINEL):
             self.objetivos.pop(0)  # eliminar este objetivo de la lista
             self.turrets_built += 1
 
