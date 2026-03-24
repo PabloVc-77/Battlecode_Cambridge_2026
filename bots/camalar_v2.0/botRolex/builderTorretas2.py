@@ -122,8 +122,9 @@ def find_harvesters(self, c: Controller):
             c.move(dir)
 
         #intentar construir torreta en la casilla anterior
-        if c.can_build_sentinel(prev_pos, prev_pos.direction_to(self.enemy_core_pos)):
-            c.build_sentinel(prev_pos, prev_pos.direction_to(self.enemy_core_pos))
+        direccion_nexo = self.objetivos[0].direction_to(self.enemy_core_pos)
+        if c.can_build_sentinel(prev_pos, direccion_nexo):
+            c.build_sentinel(prev_pos, direccion_nexo)
             self.objetivos.pop(0)  # eliminar este objetivo de la lista
             self.turrets_built += 1
 
