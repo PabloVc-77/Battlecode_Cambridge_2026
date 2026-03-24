@@ -30,7 +30,8 @@ def run_builder(self, c: Controller):
     entityID = c.get_tile_building_id(current)
     tileTeam = c.get_team(entityID)
     if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) in [EntityType.CONVEYOR, EntityType.CONVEYOR, EntityType.SPLITTER]:
-        c.self_destruct()
+        if c.can_destroy(current):
+            c.destroy(current)
         return
 
     if len(self.objetivos) > 0:
@@ -114,6 +115,10 @@ def place_bridge_ore(self, c: Controller):
             dir = self.navegador.moveTo(c, place, False)
             if c.can_move(dir):
                 c.move(dir)
+    elif current.distance_squared(place) > 2:
+        dir = self.navegador.moveTo(c, place, False)
+        if c.can_move(dir):
+            c.move(dir)
 
     self.end_bridges.sort(key=lambda p: place.distance_squared(p))  # ordenar desde place, no current
     end = _find_viable_bridge_end(self.end_bridges, place, self.end_bridges, c)
@@ -169,9 +174,15 @@ def bridgeHome(self, c: Controller):
     c.draw_indicator_dot(end, 255, 255, 0)
 
     something = c.get_tile_building_id(bridge_end)
-    if something is not None:
+    if something is not None: # Hay algo
         if c.can_destroy(bridge_end):
             c.destroy(bridge_end)
+        else:
+            dir = self.navegador.moveTo(c, bridge_end, False)
+            if c.can_move(dir):
+                c.move(dir)
+            if c.can_destroy(bridge_end):
+                c.destroy(bridge_end)
 
     if c.can_build_bridge(bridge_end, end):
         c.build_bridge(bridge_end, end)

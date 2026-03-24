@@ -92,7 +92,7 @@ class Player:
                         break
 
                 round = ct.get_current_round()
-                if round >= 180:
+                if round == -180:
                     self.builder_type = BUILDERS[1] # torreta
                 elif round == 1:
                     self.builder_type = BUILDERS[2] # defensivo
