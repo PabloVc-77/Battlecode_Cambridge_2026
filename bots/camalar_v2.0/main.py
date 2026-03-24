@@ -57,6 +57,8 @@ class Player:
             # mode 3: revisar estructura
         self.last_bridge_end = None
         self.check_pos = None
+
+        self.recolectores = []
         
         # Type of Builder
         self.builder_type = None
@@ -79,6 +81,8 @@ class Player:
         self.fase2 = 0
         self.replace = []
 
+        self.brain = None
+
     def run(self, ct: Controller) -> None:
         etype = ct.get_entity_type()
         if etype == EntityType.CORE:
@@ -92,7 +96,7 @@ class Player:
                         break
 
                 round = ct.get_current_round()
-                if round == -180:
+                if ct.get_unit_count() > 7:
                     self.builder_type = BUILDERS[1] # torreta
                 elif round == 1:
                     self.builder_type = BUILDERS[2] # defensivo
