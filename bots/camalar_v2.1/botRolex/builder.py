@@ -377,8 +377,16 @@ def place_conveyors(self, c: Controller):
 
     conv_pos, conv_dir = self.conveyor_path[0]
     
-    build_id = c.get_tile_building_id(conv_pos)
-    if build_id is not None:
+    build_id = None
+    if c.is_in_vision(conv_pos):
+        build_id = c.get_tile_building_id(conv_pos)
+    
+    if c.get_position().distance_squared(conv_pos) > 2:
+        dir = self.navegador.moveTo(c, conv_pos, False)
+        if c.can_move(dir):
+            c.move(dir)
+
+    if build_id is not None and c.is_in_vision(conv_pos):
         if c.get_team() == c.get_team(build_id):
             if c.can_destroy(conv_pos):
                 c.destroy(conv_pos)
@@ -429,7 +437,7 @@ def _is_conv_better(c: Controller, ini: Position, end: Position):
 
         i = len(path)
         coste_acumulado = (i + 0.01 * i) * conveyor_cost
-        if coste_acumulado > bridge_cost:
+        if i > 2:
             return None  # ya es más caro que el puente, cortar
 
         if current == end:
