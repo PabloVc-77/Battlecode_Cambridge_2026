@@ -55,8 +55,10 @@ class Player:
             # mode 1: Place bridge near Ore
             # mode 2: go home
             # mode 3: revisar estructura
+            # mode 4: conv replace bridge
         self.last_bridge_end = None
         self.check_pos = None
+        self.conveyor_path = None
 
         self.recolectores = []
         
