@@ -46,6 +46,11 @@ class BugNav:
             Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST,
         ]
 
+        # Explorer state
+        self._visited = set()
+        self._frontiers = set()
+        self._explore_target = None
+
         self.reset()
 
     def reset(self):
@@ -300,3 +305,45 @@ class BugNav:
 
         self.dvd = random.choice(self.fdirs if four_dirs else self.dirs)
         return self.dvd
+
+
+
+    def _update_exploration(self, c: Controller):
+        dirs = self.dirs
+        for tile in c.get_nearby_tiles():
+            pos = tile  # ajusta si es necesario
+            if pos not in self._visited:
+                self._visited.add(pos)
+                self._frontiers.discard(pos)
+                for d in dirs:
+                    neighbor = pos.add(d)
+                    w, h = c.get_map_width(), c.get_map_height()
+                    if (0 <= neighbor.x < w and 0 <= neighbor.y < h
+                            and neighbor not in self._visited
+                            and c.is_in_vision(neighbor)
+                            and c.is_tile_passable(neighbor)):
+                        self._frontiers.add(neighbor)
+
+    def moveExplore(self, c: Controller, four_dirs: bool = False) -> Direction:
+        self._update_exploration(c)
+        current = c.get_position()
+
+        # Invalida el target si ya lo vemos o lo alcanzamos
+        if self._explore_target is not None:
+            if (current == self._explore_target
+                    or self._explore_target in self._visited
+                    or c.is_in_vision(self._explore_target)):
+                self._explore_target = None
+                self.reset()
+
+        # Elige nueva frontera más cercana
+        if self._explore_target is None:
+            if not self._frontiers:
+                return self.moveDvD(c, four_dirs)  # fallback: mapa explorado
+            self._explore_target = min(
+                self._frontiers,
+                key=lambda p: current.distance_squared(p)
+            )
+            self.reset()
+
+        return self.moveTo(c, self._explore_target, four_dirs)

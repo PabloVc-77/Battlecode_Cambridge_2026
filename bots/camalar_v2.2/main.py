@@ -44,6 +44,9 @@ class Player:
         self.num_tbuilders = 0 # numero de builders torreta
 
         # Builder Vars
+        self.is_first_builder = False
+        self.is_first_harvester = True
+        self.first_bridge = None
         self.navegador = bugnav.BugNav()
         self.spawn = None
         self.conveyor_mode = False
@@ -55,10 +58,12 @@ class Player:
             # mode 1: Place bridge near Ore
             # mode 2: go home
             # mode 3: revisar estructura
+            # mode 5: torretas en primer harvester
         self.last_bridge_end = None
         self.check_pos = None
 
         self.recolectores = []
+        self.turret_places = []
         
         # Type of Builder
         self.builder_type = None
@@ -102,6 +107,8 @@ class Player:
                     self.builder_type = BUILDERS[2] # defensivo
                 else:
                     self.builder_type = BUILDERS[0] # normal
+
+                    self.is_first_builder = round == 2
                     
                     s = self.spawn
                     viable_end_of_bridges = [s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.EAST), s.add(Direction.NORTH).add(Direction.NORTH), s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.WEST),

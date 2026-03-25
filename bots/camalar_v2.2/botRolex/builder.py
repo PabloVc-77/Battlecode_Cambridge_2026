@@ -112,6 +112,10 @@ def run_builder(self, c: Controller):
         # Revisar camino a casa
         revisar_camino_casa(self, c)
         return
+    elif self.mode == 5:
+        # Reforzar Harvester
+        reforzar_harvester(self, c)
+        return
 
     oreCerca(self, c)
     current = c.get_position()
@@ -196,14 +200,17 @@ def run_builder(self, c: Controller):
 def place_bridge_ore(self, c: Controller):
     places = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
     viable_places = []
+    extra_places_for_turrent = []
     for d in places:
         spot = self.current_target.add(d)
         if _is_in_bounds(c, spot) and c.is_in_vision(spot):
             something = c.get_tile_building_id(spot)
             something2 = c.get_tile_env(spot)
-            if something is None or (c.get_team(something) == c.get_team() and c.get_entity_type(something) in [EntityType.ROAD]):
+            if (something is None or c.is_tile_passable(spot)) and something2 != Environment.WALL:
                 if something2 not in [Environment.ORE_AXIONITE, Environment.ORE_TITANIUM]:
                     viable_places.append(spot)
+                else:
+                    extra_places_for_turrent.append(spot)
     
     if len(viable_places) == 0:
         self.current_target = None
@@ -215,6 +222,14 @@ def place_bridge_ore(self, c: Controller):
     place = viable_places[0]
     c.draw_indicator_dot(place, 0, 0, 0)
     dir = Direction.CENTRE
+
+    if self.is_first_harvester:
+        turret_places = extra_places_for_turrent
+        if len(viable_places) > 1:
+            for p in viable_places[1:]:
+                turret_places.append(p)
+        
+        self.turret_places = turret_places
     
     if place == current:
         dir = self.navegador.moveTo(c, self.spawn, False)
@@ -251,6 +266,11 @@ def place_bridge_ore(self, c: Controller):
             self.last_bridge_end = None
         elif c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE:
             self.mode = 3
+
+        if self.is_first_builder and self.is_first_harvester:
+            self.first_bridge = place
+            self.is_first_harvester = False
+            self.mode = 5
 
 
 def bridgeHome(self, c: Controller):
@@ -417,4 +437,75 @@ def revisor_casillas_extractor (c: Controller, pos: Position):
                 break
     return Existe            
 
-pass
+# MODE 5
+
+def reforzar_harvester(self, c: Controller):
+    self.turret_places.sort(key=lambda p: self.spawn.distance_squared(p))
+    
+    if len(self.turret_places) == 0:
+        self.mode = 2
+        end = None
+        if c.is_in_vision(self.first_bridge):
+            end = c.get_bridge_target(c.get_tile_building_id(self.first_bridge))
+        
+        if end is not None and end in self.end_bridges:
+            self.mode = 0
+            self.last_bridge_end = None
+        return
+
+    #i = 0
+    place_to_build = None
+    t_place = self.turret_places[0]
+    #for t_place in  self.turret_places:
+        #i += 1
+    t_id = c.get_tile_building_id(t_place)
+    dir = t_place.direction_to(self.first_bridge)
+    #if i != 1:
+    #    dir = t_place.direction_to(self.spawn).opposite()
+    
+    if t_id is not None and c.get_entity_type(t_id) != EntityType.SENTINEL:
+        if c.can_destroy(t_place):
+            c.destroy(t_place)
+        if c.can_fire(t_place):
+            c.fire(t_place)
+
+    if c.can_build_sentinel(t_place, dir):
+        c.build_sentinel(t_place, dir)
+    elif place_to_build is None or c.get_entity_type(t_id) != EntityType.SENTINEL:
+        place_to_build = t_place
+
+    if place_to_build is None:
+        self.mode = 2
+        end = None
+        if c.is_in_vision(self.first_bridge):
+            end = c.get_bridge_target(c.get_tile_building_id(self.first_bridge))
+        
+        if end is not None and end in self.end_bridges:
+            self.mode = 0
+            self.last_bridge_end = None
+
+        return
+
+    current = c.get_position()
+    dist = current.distance_squared(place_to_build)
+    place_id = c.get_tile_building_id(place_to_build)
+    if dist > 2:
+        direc = self.navegador.moveTo(c, place_to_build, False)
+        move_pos = current.add(direc)
+
+        if c.can_build_road(move_pos):
+            c.build_road(move_pos)
+
+        if c.can_move(direc) and (current.add(direc).distance_squared(place_to_build) != 0 or (place_id is not None and c.get_team(place_id) != c.get_team())):
+            c.move(direc)
+    elif dist == 0 and (place_id is None or c.get_team(place_id) == c.get_team()):
+        direc = self.navegador.moveTo(c, self.spawn, False)
+        move_pos = current.add(direc)
+
+        if c.can_build_road(move_pos):
+            c.build_road(move_pos)
+
+        if c.can_move(direc):
+            c.move(direc)
+
+    return
