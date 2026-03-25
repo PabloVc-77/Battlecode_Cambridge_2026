@@ -51,11 +51,11 @@ class Player:
 
         self.end_bridges = []
         self.mode = 0
-            # mode 0: Find Ore
-            # mode 1: Place bridge near Ore
-            # mode 2: go home
-            # mode 3: revisar estructura
-            # mode 4: conv replace bridge
+            # mode 0: Find Ore (Blanco)
+            # mode 1: Place bridge near Ore (Verde)
+            # mode 2: go home (Rojo)
+            # mode 3: revisar estructura (Naranja)
+            # mode 4: conv replace bridge (Azul)
         self.last_bridge_end = None
         self.check_pos = None
         self.conveyor_path = None

@@ -6,24 +6,30 @@ import bignav_opus as bugnav
 
 def run_builder(self, c: Controller):
     #logica del builder aqui
+    current = c.get_position()
     if self.mode == 1:
         # place bridge near ore
+        c.draw_indicator_dot(current, 24, 184, 69)
         place_bridge_ore(self, c)
         return
     elif self.mode == 2:
         # go home
+        c.draw_indicator_dot(current, 204, 16, 73)
         bridgeHome(self, c)
         return
     elif self.mode == 3:
         # Revisar camino a casa
+        c.draw_indicator_dot(current, 237, 129, 26)
         revisar_camino_casa(self, c)
         return
     elif self.mode == 4:
+        c.draw_indicator_dot(current, 26, 42, 219)
         place_conveyors(self, c)
         return
+    
+    c.draw_indicator_dot(current, 255, 255, 255)
 
     oreCerca(self, c)
-    current = c.get_position()
     target = None
     entityID = c.get_tile_building_id(current)
     tileTeam = c.get_team(entityID)
@@ -120,7 +126,7 @@ def place_bridge_ore(self, c: Controller):
         return
     
     current = c.get_position()
-    viable_places.sort(key=lambda p: current.distance_squared(p))
+    viable_places.sort(key=lambda p: self.spawn.distance_squared(p))
     place = viable_places[0]
     c.draw_indicator_dot(place, 0, 0, 0)
 
@@ -334,7 +340,7 @@ def revisar_camino_casa(self, c: Controller):
     if c.get_entity_type(building_id) == EntityType.BRIDGE:
         next_check = c.get_bridge_target(building_id)
     else:
-        next_check = self.last_bridge_end.add(c.get_direction(building_id))
+        next_check = self.check_pos.add(c.get_direction(building_id))
 
     if next_check is None:
         self.last_bridge_end = self.check_pos
@@ -345,22 +351,22 @@ def revisar_camino_casa(self, c: Controller):
     # Todo bien en este eslabón, avanzar
     self.check_pos = next_check
 
-def revisor_casillas_extractor (c: Controller, pos: Position):
-    # lógica para revisar casillas alrededor del extractor
-    Existe = False
-    casillas = [pos.add(Direction.NORTH), pos.add(Direction.EAST), pos.add(Direction.SOUTH), pos.add(Direction.WEST)]
+def revisor_casillas_extractor(c: Controller, pos: Position) -> bool:
+    casillas = [pos.add(Direction.NORTH), pos.add(Direction.EAST),
+                pos.add(Direction.SOUTH), pos.add(Direction.WEST)]
 
     for casilla in casillas:
         if _is_in_bounds(c, casilla):
             if c.is_in_vision(casilla):
                 building_id = c.get_tile_building_id(casilla)
-                if building_id is not None and c.get_entity_type(building_id) == EntityType.BRIDGE and c.get_team(building_id) == c.get_team():
-                    Existe = True
-                    break
+                if building_id is not None and c.get_team(building_id) == c.get_team():
+                    if c.get_entity_type(building_id) in (EntityType.BRIDGE,
+                                                           EntityType.CONVEYOR,
+                                                           EntityType.ARMOURED_CONVEYOR):
+                        return True
             else:
-                Existe = True
-                break
-    return Existe            
+                return True  # sin visión asumimos que está conectado
+    return False          
 
 # MODE 4
 def place_conveyors(self, c: Controller):
