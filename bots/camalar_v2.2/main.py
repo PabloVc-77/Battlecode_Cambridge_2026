@@ -14,9 +14,9 @@ import random
 
 from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
-from botRolex.builder import run_builder
-from botRolex.builderTorretas2 import run_builder_torretas2
-from botRolex.defensivo import run_defensivo
+from botRolex.builder import Harvester
+from botRolex.builderTorretas2 import Torreta
+from botRolex.defensivo import Defensivo
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
 import bignav_opus as bugnav
@@ -36,6 +36,9 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
 
 class Player:
     def __init__(self):
+        # BRAIN
+        self.brain = None
+
         #General Vars
         self.objetivos = []
 
@@ -86,14 +89,12 @@ class Player:
         self.fase2 = 0
         self.replace = []
 
-        self.brain = None
-
     def run(self, ct: Controller) -> None:
         etype = ct.get_entity_type()
         if etype == EntityType.CORE:
             run_core(self, ct)
         elif etype == EntityType.BUILDER_BOT:
-            if(self.spawn is None): # primera ronda de su vida
+            if(self.brain is None): # primera ronda de su vida
                 builds = ct.get_nearby_buildings()
                 for b in builds:
                     if ct.get_entity_type(b) == EntityType.CORE:
@@ -102,36 +103,14 @@ class Player:
 
                 round = ct.get_current_round()
                 if ct.get_unit_count() > 6:
-                    self.builder_type = BUILDERS[1] # torreta
+                   self.brain = Torreta(ct) # torreta
                 elif round == 1:
-                    self.builder_type = BUILDERS[2] # defensivo
+                    self.brain =  Defensivo(ct) # defensivo
                 else:
-                    self.builder_type = BUILDERS[0] # normal
+                    self.brain = Harvester(ct)
 
-                    self.is_first_builder = round == 2
-                    
-                    s = self.spawn
-                    viable_end_of_bridges = [s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.EAST), s.add(Direction.NORTH).add(Direction.NORTH), s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.WEST),
-                                             s.add(Direction.EAST).add(Direction.EAST).add(Direction.NORTH), s.add(Direction.EAST).add(Direction.EAST), s.add(Direction.EAST).add(Direction.EAST).add(Direction.SOUTH),
-                                             s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.EAST), s.add(Direction.SOUTH).add(Direction.SOUTH), s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.WEST),
-                                             s.add(Direction.WEST).add(Direction.WEST).add(Direction.NORTH), s.add(Direction.WEST).add(Direction.WEST), s.add(Direction.WEST).add(Direction.WEST).add(Direction.SOUTH)]
-                                             #s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.EAST).add(Direction.EAST), s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.WEST).add(Direction.WEST),
-                                             #s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.EAST).add(Direction.EAST), s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.WEST).add(Direction.WEST)]
-                    for v in viable_end_of_bridges:
-                        if _is_in_bounds(ct, v):
-                            ct.draw_indicator_dot(v, 245, 73, 39)
-                            self.end_bridges.append(v)
+            self.brain.run(ct)
 
-            if self.turrets_built >= 3:
-                self.objetivos.clear()  # dejar de buscar harvesters
-                self.builder_type = BUILDERS[0]  # cambiar a builder normal
-
-            if self.builder_type == BUILDERS[0]:
-                run_builder(self, ct)
-            elif self.builder_type == BUILDERS[1]:
-                run_builder_torretas2(self, ct)
-            elif self.builder_type == BUILDERS[2]:
-                run_defensivo(self, ct)
         elif etype == EntityType.SENTINEL:
             run_sentinel(self, ct)
         elif etype == EntityType.BREACH:
