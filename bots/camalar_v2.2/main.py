@@ -19,20 +19,6 @@ from botRolex.builderTorretas2 import Torreta
 from botRolex.defensivo import Defensivo
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
-import bignav_opus as bugnav
-
-# non-centre directions
-DIRECTIONS = [d for d in Direction if d != Direction.CENTRE]
-# types of builder bots
-BUILDERS = ["normal", "torreta", "defensivo"]
-
-def _is_in_bounds(c: Controller, pos: Position) -> bool:
-    w = c.get_map_width()
-    h = c.get_map_height()
-
-    return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
-
-
 
 class Player:
     def __init__(self):
