@@ -39,55 +39,10 @@ class Player:
         # BRAIN
         self.brain = None
 
-        #General Vars
-        self.objetivos = []
-
         # Core Vars
         self.num_spawned = 0 # number of builder bots spawned so far (core)
         self.num_tbuilders = 0 # numero de builders torreta
 
-        # Builder Vars
-        self.is_first_builder = False
-        self.is_first_harvester = True
-        self.first_bridge = None
-        self.navegador = bugnav.BugNav()
-        self.spawn = None
-        self.conveyor_mode = False
-        self.current_target = None
-
-        self.end_bridges = []
-        self.mode = 0
-            # mode 0: Find Ore
-            # mode 1: Place bridge near Ore
-            # mode 2: go home
-            # mode 3: revisar estructura
-            # mode 5: torretas en primer harvester
-        self.last_bridge_end = None
-        self.check_pos = None
-
-        self.recolectores = []
-        self.turret_places = []
-        
-        # Type of Builder
-        self.builder_type = None
-
-        # Builder_Torretas Vars
-        self.enemy_core_pos = None
-        self.my_core = None
-        self.simetry = 0
-        self.enemy_core = []
-        self.turrets_built = 0
-        self.breach_built = 0
-        self.caminos_objetivo = []
-        self.breach_objetivo_pendiente = None
-
-        # Builder_Defensivo Vars
-        # self.my_core
-        self.furnace = False
-        self.splitter_pos = None
-        self.furnace_pos = None
-        self.fase2 = 0
-        self.replace = []
 
     def run(self, ct: Controller) -> None:
         etype = ct.get_entity_type()
@@ -107,7 +62,7 @@ class Player:
                 elif round == 1:
                     self.brain =  Defensivo(ct) # defensivo
                 else:
-                    self.brain = Harvester(ct)
+                    self.brain = Harvester(ct) # normal
 
             self.brain.run(ct)
 
