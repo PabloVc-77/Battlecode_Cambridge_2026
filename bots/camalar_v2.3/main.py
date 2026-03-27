@@ -14,11 +14,16 @@ import random
 
 from cambc import Controller, Direction, EntityType, Environment, Position
 from botRolex.core import run_core 
+
+# BUILDER BOTS
 from botRolex.builder import Harvester
 from botRolex.builderTorretas2 import Torreta
 from botRolex.defensivo import Defensivo
+
+# TORRETAS
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
+from torretaRolex.launcher import Launcher
 
 class Player:
     def __init__(self):
@@ -56,6 +61,11 @@ class Player:
             run_sentinel(self, ct)
         elif etype == EntityType.BREACH:
             run_breach(self, ct)
+        elif etype == EntityType.LAUNCHER:
+            if self.brain is None:
+                self.brain = Launcher(ct)
+            
+            self.brain.run(ct)
 
             
                 
