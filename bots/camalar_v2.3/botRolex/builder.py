@@ -11,15 +11,19 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
     return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
 
 def _find_viable_bridge_end(end_of_bridges, place: Position, candidates: list, c: Controller) -> Position | None:
-    """
-    Dado `place` y una lista de destinos candidatos (end_bridges ordenados por
-    distancia), devuelve el primer end válido, o None si ninguno sirve.
-    """
+    best_direct = None      # conecta directo a un end_bridge
+    best_chained = None     # encadena con otro puente
+
     for target in candidates:
         end = _get_end_of_bridge(end_of_bridges, place, target, c)
-        if end is not None:
-            return end
-    return None
+        if end is None:
+            continue
+        if end in end_of_bridges:
+            return end  # no hay nada mejor, salir ya
+        if best_chained is None:
+            best_chained = end
+
+    return best_chained  # solo si no hubo ningún directo
 
 def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Controller) -> Position | None:
     dx = target.x - place.x
@@ -287,11 +291,17 @@ class Harvester:
 
         if place == current:
             dir = self.navegador.moveTo(c, self.spawn, False)
+            move_pos = current.add(dir)
+            if c.can_build_road(move_pos):
+                c.build_road(move_pos)
             if c.can_move(dir):
                 c.move(dir)
 
         if current.distance_squared(place) > 2:
             dir = self.navegador.moveTo(c, place, False)
+            move_pos = current.add(dir)
+            if c.can_build_road(move_pos):
+                c.build_road(move_pos)
             if c.can_move(dir):
                 c.move(dir)
 
@@ -543,6 +553,8 @@ class Harvester:
                     if not c.is_tile_passable(spot):
                         continue
                     if c.get_entity_type(building_id) in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.SPLITTER, EntityType.BRIDGE) and c.get_team() == c.get_team(building_id):
+                        continue
+                    if c.get_entity_type(building_id) == EntityType.CORE:
                         continue
                 candidates.append(spot)
 
