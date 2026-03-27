@@ -10,101 +10,6 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
 
     return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
 
-def _find_viable_bridge_end(end_of_bridges, place: Position, candidates: list, c: Controller) -> Position | None:
-    best_direct = None      # conecta directo a un end_bridge
-    best_chained = None     # encadena con otro puente
-
-    for target in candidates:
-        end = _get_end_of_bridge(end_of_bridges, place, target, c)
-        if end is None:
-            continue
-        if end in end_of_bridges:
-            return end  # no hay nada mejor, salir ya
-        if best_chained is None:
-            best_chained = end
-
-    return best_chained  # solo si no hubo ningún directo
-
-
-
-#Dividido ahora en dos fases: _find_best_bridge_end (barato) y _find_bridge_step (cara y solo si no llega a poner directamente)
-def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Controller) -> Position | None:
-    dx = target.x - place.x
-    dy = target.y - place.y
-    dist_sq = dx * dx + dy * dy
-
-    if dist_sq == 0:
-        return None
-
-    dist = math.sqrt(dist_sq)
-    ux = dx / dist
-    uy = dy / dist
-
-    best = None
-    best_score = None  # (dist_to_target_sq negado, d_sq, dot) — menor dist_to_target primero
-
-    for ddx in range(-3, 4):
-        for ddy in range(-3, 4):
-            d_sq = ddx * ddx + ddy * ddy
-            if d_sq == 0 or d_sq > 9:
-                continue
-
-            candidate = Position(place.x + ddx, place.y + ddy)
-
-            if not _is_in_bounds(c, candidate):
-                continue
-
-            dot = ddx * ux + ddy * uy
-            if dot <= 0:
-                continue
-            
-            # Si no está en visión, no lo aceptamos (no sabemos qué hay)
-            if c.is_in_vision(candidate):
-                env = c.get_tile_env(candidate)
-                if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE, Environment.WALL):
-                    continue
-                
-                building_id = c.get_tile_building_id(candidate)
-                if building_id is not None:
-                    if c.get_team(building_id) != c.get_team() and not c.is_tile_passable(candidate):
-                        continue
-                    if c.get_entity_type(building_id) not in (EntityType.ROAD, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER, EntityType.FOUNDRY):
-                        continue
-            else:
-                continue
-
-            # Distancia restante al target desde este candidato
-            remaining_sq = candidate.distance_squared(target)
-
-            # Score: minimizar distancia restante, luego maximizar avance y alineación
-            score = (-remaining_sq, d_sq, dot)
-            if best_score is None or score > best_score:
-                best_score = score
-                best = candidate
-
-    builds = c.get_nearby_buildings()
-    bridges = list(filter(lambda b: c.get_team(b) == c.get_team() and c.get_entity_type(b) == EntityType.BRIDGE, builds))
-
-    if best is not None:
-        best_score = best.distance_squared(target)
-    else:
-        best_score = -1
-
-    if best is not None and best in end_bridges:
-        return best
-
-    for b in bridges:
-        end_point = c.get_bridge_target(b)
-        remaining_sq = end_point.distance_squared(target)
-        end = c.get_position(b)
-        c.draw_indicator_dot(end, 245, 73, 39)
-        c.draw_indicator_line(end, end_point, 245, 73, 39)
-        if best_score >= remaining_sq and place.distance_squared(end) <= 9:
-            best_score = remaining_sq
-            best = end
-
-    return best
-
 def revisor_casillas_extractor(c: Controller, pos: Position):
     # lógica para revisar casillas alrededor del extractor
     Existe = False
@@ -168,7 +73,7 @@ class Harvester:
                                 #s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.EAST).add(Direction.EAST), s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.WEST).add(Direction.WEST)]
 
         for v in viable_end_of_bridges:
-            if _is_in_bounds(c, v):
+            if _is_in_bounds(c, v) and c.is_in_vision(v) and c.get_tile_env(v) != Environment.WALL:
                 c.draw_indicator_dot(v, 245, 73, 39)
                 self.end_bridges.append(v)
 
@@ -572,8 +477,12 @@ class Harvester:
                     continue
                 if not c.is_in_vision(spot):
                     continue
+                if spot in self.end_bridges:
+                    continue
                 env = c.get_tile_env(spot)
                 if env in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
+                    continue
+                if self.last_bridge_end is not None and self.last_bridge_end == spot:
                     continue
                 building_id = c.get_tile_building_id(spot)
                 if building_id is not None:
@@ -632,7 +541,58 @@ class Harvester:
             if not self.pending_launcher_bridges:
                 self.mode = self.mode_after_launcher
 
+    # MODE 7
+
+    def colocar_defensas(self, c:Controller, harvester_pos: Position):
+        candidates = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
+        for candidate in candidates:
+            #construir muros en todas las casillas adyacentes al harvester que no están ocupadas/son del equipo enemigo y son roads
+            candidato  = harvester_pos + candidate.delta()
+            edificio = c.get_entity_type(candidato)
+            if edificio is not None:
+                if edificio != EntityType.ROAD:
+                    continue # no se puede hacer nada aquí, solo construir si es road o no hay nada
+            if self.construir(c, candidato, EntityType.BARRIER):
+                continue
+
     # UTILITY
+    def construir(self, c: Controller, objetivo: Position, edificio : EntityType) -> bool:
+        moveNext = True
+
+        dist_to = math.sqrt((objetivo.x - c.get_position().x) ** 2 + (objetivo.y - c.get_position().y) ** 2)
+        if dist_to <= 2: # a distancia de acción de la casilla
+            tile = c.get_tile_building_id(c.get_position())
+            team = c.get_team(tile)
+            moveNext = False
+            if team != c.get_team():
+                #romper esta casilla
+                if c.can_fire(c.get_position()):
+                    c.fire(c.get_position())
+            else:
+                #quitar esta casilla
+                if c.can_destroy(c.get_position()):
+                    c.destroy(c.get_position())
+            if c.get_tile_building_id(c.get_position()) == None:
+                moveNext = True
+
+         # Debug: línea hacia el objetivo
+        c.draw_indicator_line(c.get_position(), objetivo, 50, 0, 255)
+        if moveNext:
+            dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
+            move_pos = c.get_position().add(dir)
+            prev_pos = c.get_position()
+            if c.can_build_road(move_pos):
+                c.build_road(move_pos)
+            if c.can_move(dir):
+                c.move(dir)
+
+            #intentar construir en la casilla anterior
+            if edificio == EntityType.BARRIER:
+                if c.can_build_barrier(prev_pos):
+                    c.build_barrier
+                    return True
+                return False
+
 
     def _clear_tile(self, c: Controller, target: Position) -> bool:
         """
@@ -692,16 +652,14 @@ class Harvester:
         return None
 
     def _find_bridge_step(self, place: Position, target: Position, c: Controller) -> Position | None:
-        """Solo se ejecuta si el puente directo no alcanza. Bucle 7x7 acotado."""
-        # ... bucle 7x7 igual que antes pero SIN get_nearby_buildings dentro
-        # Los puentes existentes se comprueban solo contra self.end_bridges
+        """Solo se ejecuta si el puente directo no alcanza. Bucle 7x7 + puentes aliados visibles."""
         dx = target.x - place.x
         dy = target.y - place.y
         dist = math.sqrt(dx * dx + dy * dy)
         ux, uy = dx / dist, dy / dist
 
-        best = None
-        best_score = None
+        best: Position | None = None
+        best_score: tuple | None = None  # (-remaining_sq, dot) — mayor = mejor
 
         for ddx in range(-3, 4):
             for ddy in range(-3, 4):
@@ -722,7 +680,7 @@ class Harvester:
 
                 building_id = c.get_tile_building_id(candidate)
                 if building_id is not None:
-                    entity_type = c.get_entity_type(building_id)  # cachear aquí
+                    entity_type = c.get_entity_type(building_id)
                     if c.get_team(building_id) != c.get_team() and not c.is_tile_passable(candidate):
                         continue
                     if entity_type not in (EntityType.ROAD, EntityType.CONVEYOR,
@@ -735,5 +693,32 @@ class Harvester:
                 if best_score is None or score > best_score:
                     best_score = score
                     best = candidate
+
+        # Puentes aliados visibles: si la boca está a dist² ≤ 9 y su chain-end
+        # supera al mejor candidato directo, úsala como destino.
+        builds = c.get_nearby_buildings()
+        for b in builds:
+            if c.get_team(b) != c.get_team():
+                continue
+            if c.get_entity_type(b) != EntityType.BRIDGE:
+                continue
+
+            b_pos = c.get_position(b)
+            if place.distance_squared(b_pos) > 9:
+                continue  # fuera de alcance directo, no sirve como end
+
+            # Seguir la cadena hasta el endpoint final
+            end_point = c.get_bridge_target(b)
+            end_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
+            while end_id is not None and c.get_entity_type(end_id) == EntityType.BRIDGE:
+                end_point = c.get_bridge_target(end_id)
+                end_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
+
+            remaining_sq = end_point.distance_squared(target)
+            dot = (b_pos.x - place.x) * ux + (b_pos.y - place.y) * uy
+            score = (-remaining_sq, dot)
+            if best_score is None or score > best_score:
+                best_score = score
+                best = b_pos
 
         return best

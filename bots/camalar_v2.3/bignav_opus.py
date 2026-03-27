@@ -50,7 +50,7 @@ class BugNav:
         self._frontiers = set()
         self._explore_target = None
 
-        self._BFS_MAX_DIST = 12 # Rango de Vision
+        self._BFS_MAX_DIST = 20 # Rango de Vision
         self._bfs_path = []
 
         # Random movement state

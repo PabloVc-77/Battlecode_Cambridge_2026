@@ -31,6 +31,19 @@ class Launcher:
         self.semi_spawn = next_bridge
 
     def run(self, c: Controller):
+        my_b = c.get_tile_building_id(self.my_bridge)
+
+        if my_b is not None and c.get_entity_type(my_b) == EntityType.BRIDGE:
+            next_bridge = c.get_bridge_target(my_b)
+
+            while c.is_in_vision(next_bridge):
+                b_id = c.get_tile_building_id(next_bridge)
+                if b_id is None or c.get_entity_type(b_id) != EntityType.BRIDGE:
+                    break
+                next_bridge = c.get_bridge_target(b_id)
+
+            self.semi_spawn = next_bridge
+
         viable_launching_places = c.get_nearby_tiles()
         # Más lejos de semi_spawn primero → queremos lanzar lejos
         viable_launching_places.sort(key=lambda p: self.semi_spawn.distance_squared(p), reverse=True)
