@@ -7,9 +7,10 @@ def run_core(self, c: Controller):
     #if c.get_current_round() >= 50 and c.get_current_round() <= 100 and self.num_tbuilders < 3:
      #   if spawnBuilder(self, c):
       #      self.num_tbuilders += 1
-    if c.get_current_round() >= 180 and c.get_unit_count() < 20:
-        spawnBuilder(c)
-        self.num_spawned += 1
+
+    #units = c.get_unit_count()
+    #pos = Position(units % c.get_map_width(), (int)(units / c.get_map_width()) % c.get_map_height())
+    #c.draw_indicator_dot(pos, 39, 224, 245)
 
     if self.num_spawned < 2:
         spawnBuilder(c)
@@ -25,10 +26,8 @@ def run_core(self, c: Controller):
             flag = True
             break
         
-    if flag:
-        limite = c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0]
-    else:
-        limite = c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0] + c.get_foundry_cost()[0]
+
+    limite = c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0]
 
     if limite <= recursos[0] and c.get_current_round() >= 100: 
         spawnBuilder(c)

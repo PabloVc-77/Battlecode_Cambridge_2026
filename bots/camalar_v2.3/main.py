@@ -41,14 +41,8 @@ class Player:
             run_core(self, ct)
         elif etype == EntityType.BUILDER_BOT:
             if(self.brain is None): # primera ronda de su vida
-                builds = ct.get_nearby_buildings()
-                for b in builds:
-                    if ct.get_entity_type(b) == EntityType.CORE:
-                        self.spawn = ct.get_position(b)
-                        break
-
                 round = ct.get_current_round()
-                if ct.get_unit_count() > 6:
+                if round > 50 and ct.get_id() % 3 != 0:
                    self.brain = Torreta(ct) # torreta
                 elif round == 1:
                     self.brain =  Defensivo(ct) # defensivo
