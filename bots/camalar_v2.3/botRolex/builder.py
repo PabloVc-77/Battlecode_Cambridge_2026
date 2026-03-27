@@ -47,7 +47,9 @@ class Harvester:
             # mode 5: torretas en primer harvester (Azul)
             # mode 6: colocar launcher junto a puente recién construido (Amarillo)
         self.last_bridge_end = None
+        self.last_bridge_built_pos = None
         self.check_pos = None
+        self.turret_built = False
 
         self.recolectores = []
         self.turret_places = []
@@ -100,6 +102,9 @@ class Harvester:
             c.draw_indicator_dot(current, 255, 215, 0)
             self.colocar_launcher(c)
             return
+        elif self.mode == 7:
+            c.draw_indicator_dot(current, 100, 200, 200)
+            self.colocar_defensas(c, self.current_target) #posicion actual del harvester???
 
         c.draw_indicator_dot(current, 255, 255, 255)
 
@@ -136,6 +141,16 @@ class Harvester:
                 if target in self.objetivos:
                     self.objetivos.remove(target)
                 self.mode = 1
+            
+            elif current == target:
+                for d in Direction:
+                    if d == Direction.CENTRE:
+                        continue
+                    adj = target.add(d)
+                    if _is_in_bounds(c, adj) and c.can_move(d):
+                        c.move(d)
+                        break
+
             elif current.distance_squared(target) > 2:
                 if c.can_build_road(move_pos):
                     c.build_road(move_pos)
@@ -236,10 +251,9 @@ class Harvester:
         if c.can_build_bridge(place, end):
             c.build_bridge(place, end)
             self.last_bridge_end = end
-
             # Encolar launcher para este puente
             self.pending_launcher_bridges.append(place)
-
+            self.last_bridge_built_pos = place
             # Determinar modo siguiente (que será el que recupere el launcher al terminar)
             if end in self.end_bridges:
                 self.mode_after_launcher = 0
@@ -249,7 +263,7 @@ class Harvester:
             else:
                 self.mode_after_launcher = 2
 
-            self.mode = 6
+            self.mode = 7
 
     def bridgeHome(self, c: Controller):
         current = c.get_position()
@@ -306,7 +320,7 @@ class Harvester:
         if c.can_build_bridge(bridge_end, end):
             c.build_bridge(bridge_end, end)
             self.last_bridge_end = end
-
+            self.last_bridge_built_pos = bridge_end
             # Encolar launcher para este puente
             self.pending_launcher_bridges.append(bridge_end)
 
@@ -543,56 +557,169 @@ class Harvester:
 
     # MODE 7
 
-    def colocar_defensas(self, c:Controller, harvester_pos: Position):
-        candidates = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
-        for candidate in candidates:
-            #construir muros en todas las casillas adyacentes al harvester que no están ocupadas/son del equipo enemigo y son roads
-            candidato  = harvester_pos + candidate.delta()
-            edificio = c.get_entity_type(candidato)
-            if edificio is not None:
-                if edificio != EntityType.ROAD:
-                    continue # no se puede hacer nada aquí, solo construir si es road o no hay nada
-            if self.construir(c, candidato, EntityType.BARRIER):
+    def colocar_defensas(self, c: Controller, harvester_pos: Position):
+
+        if harvester_pos is None:
+            self.mode = 6
+            return
+
+        candidates = [
+            harvester_pos.add(Direction.NORTH),
+            harvester_pos.add(Direction.EAST),
+            harvester_pos.add(Direction.SOUTH),
+            harvester_pos.add(Direction.WEST),
+        ]
+
+        for objetivo in candidates:
+            if not _is_in_bounds(c, objetivo):
                 continue
 
+            if not c.is_in_vision(objetivo):
+                dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
+                if c.can_move(dir):
+                    c.move(dir)
+                return
+
+            # Skip permanente si es muro
+            if c.get_tile_env(objetivo) == Environment.WALL:
+                continue
+
+            building_id = c.get_tile_building_id(objetivo)
+
+            if building_id is not None:
+                entity = c.get_entity_type(building_id)
+                team = c.get_team(building_id)
+
+                # Casilla ya tiene lo que queremos construir
+                if entity == EntityType.BARRIER and team == c.get_team():
+                    continue
+
+                # Solo actuamos sobre roads; cualquier otra estructura la saltamos
+                if entity != EntityType.ROAD:
+                    continue
+
+            if self.turret_built: #construir barreras
+                resultado = self.construir(c, objetivo, EntityType.BARRIER)
+            else: #construir la torreta que protege el puente
+                resultado = self.construir(c,objetivo, EntityType.SENTINEL)
+                if resultado:
+                    self.turret_built = True
+            if not resultado:
+                return  # Necesitamos más turnos; volvemos el siguiente tick
+
+        # Todas las casillas procesadas
+        self.turret_built = False #resetear para la siguiente mina
+        self.mode = 6
+
+        
+
     # UTILITY
-    def construir(self, c: Controller, objetivo: Position, edificio : EntityType) -> bool:
-        moveNext = True
+    def construir(self, c: Controller, objetivo: Position, edificio: EntityType) -> bool:
+        """
+        Intenta construir 'edificio' en 'objetivo'.
 
-        dist_to = math.sqrt((objetivo.x - c.get_position().x) ** 2 + (objetivo.y - c.get_position().y) ** 2)
-        if dist_to <= 2: # a distancia de acción de la casilla
-            tile = c.get_tile_building_id(c.get_position())
-            team = c.get_team(tile)
-            moveNext = False
-            if team != c.get_team():
-                #romper esta casilla
-                if c.can_fire(c.get_position()):
-                    c.fire(c.get_position())
-            else:
-                #quitar esta casilla
-                if c.can_destroy(c.get_position()):
-                    c.destroy(c.get_position())
-            if c.get_tile_building_id(c.get_position()) == None:
-                moveNext = True
+        Flujo:
+        1. Si la casilla ya tiene el edificio propio deseado → True (ya está hecho).
+        2. Si hay una road propia → la destruye y retorna False (construirá el turno siguiente).
+        3. Si hay una road enemiga → se pone encima, la ataca; si la destruyó, sale a una
+            casilla adyacente y retorna False (construirá el turno siguiente).
+        4. Casilla vacía → se acerca si hace falta y construye → True.
+        5. Cualquier otro edificio (irrompible o que no queremos quitar) → True (skip permanente).
 
-         # Debug: línea hacia el objetivo
-        c.draw_indicator_line(c.get_position(), objetivo, 50, 0, 255)
-        if moveNext:
+        Devuelve True  cuando la casilla está "resuelta" (construida o saltada definitivamente).
+        Devuelve False cuando necesita más turnos (hay que volver a llamar el siguiente tick).
+        """
+        current = c.get_position()
+        building_id = c.get_tile_building_id(objetivo)
+
+        # ── 1. Ya está construido lo que queremos ────────────────────────────────
+        if building_id is not None:
+            entity = c.get_entity_type(building_id)
+            team = c.get_team(building_id)
+
+            if entity == edificio and team == c.get_team():
+                return True  # Ya existe; nada que hacer
+
+            # ── 2. Road propia: destruir y esperar al turno siguiente ────────────
+            if entity == EntityType.ROAD and team == c.get_team():
+                if current.distance_squared(objetivo) > 2:
+                    if not self.navegador.is_reachable(c, objetivo):
+                        return True # skip permanente: inalcanzable
+                    c.draw_indicator_line(current, objetivo, 0, 100, 0)  # verde oscuro
+                    dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
+                    next_pos = current.add(dir)
+                    if c.can_build_road(next_pos):
+                        c.build_road(next_pos)
+                    if c.can_move(dir):
+                        c.move(dir)
+                    return False  # Nos acercamos primero
+
+                if c.can_destroy(objetivo):
+                    c.destroy(objetivo)
+                return False  # El turno siguiente la casilla estará vacía
+
+            # ── 3. Road enemiga: ponerse encima y atacar ─────────────────────────
+            if entity == EntityType.ROAD and team != c.get_team():
+                if current != objetivo:
+                    if c.is_tile_passable(objetivo):
+                        c.draw_indicator_line(current, objetivo, 0, 100, 0)  # verde oscuro
+                        dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
+                        next_pos = current.add(dir)
+                        if c.can_build_road(next_pos):
+                            c.build_road(next_pos)
+                        if c.can_move(dir):
+                            c.move(dir)
+                    return False  # Aún no estamos encima
+
+                # Estamos encima: atacar
+                if c.can_fire(objetivo):
+                    c.fire(objetivo)
+
+                # Si se destruyó, salir a una casilla adyacente para poder construir
+                if c.get_tile_building_id(objetivo) is None:
+                    for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
+                        adj = objetivo.add(d)
+                        if _is_in_bounds(c, adj):
+                            dir = self.navegador.moveTo(c, adj, four_dirs=False)
+                            if c.can_move(dir):
+                                c.move(dir)
+                                break
+
+                return False  # El turno siguiente construiremos
+
+            # ── 5. Cualquier otro edificio: skip permanente ──────────────────────
+            return True
+
+        # ── 4. Casilla vacía: acercarse y construir ──────────────────────────────
+        if current.distance_squared(objetivo) > 2:
+            c.draw_indicator_line(current, objetivo, 0, 100, 0)  # verde oscuro
             dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
-            move_pos = c.get_position().add(dir)
-            prev_pos = c.get_position()
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
             if c.can_move(dir):
                 c.move(dir)
+            return False
 
-            #intentar construir en la casilla anterior
-            if edificio == EntityType.BARRIER:
-                if c.can_build_barrier(prev_pos):
-                    c.build_barrier
-                    return True
-                return False
+        # En rango: construir según el tipo de edificio
+        if edificio == EntityType.BARRIER and c.can_build_barrier(objetivo):
+            c.build_barrier(objetivo)
+            return True
 
+        if edificio == EntityType.SENTINEL:
+            # Ejemplo de cómo extender para otros tipos en el futuro
+            dir_torreta = objetivo.direction_to(self.last_bridge_built_pos)
+            dir_harvester = objetivo.direction_to(self.current_target)
+            c.draw_indicator_dot(objetivo, 0,200,0)
+            c.draw_indicator_dot(self.current_target,0,100,0)
+            c.draw_indicator_dot(self.last_bridge_built_pos,200,200,0)
+            if dir_torreta == dir_harvester: # no sirve pq no recibe recursos, girar 1 (sigue apuntando a objetivo)
+                dir_torreta = dir_torreta.rotate_left() #p.ej.
+            if c.can_build_sentinel(objetivo, dir_torreta):
+                c.build_sentinel(objetivo, dir_torreta)
+                return True
+
+        return False
 
     def _clear_tile(self, c: Controller, target: Position) -> bool:
         """
@@ -641,14 +768,76 @@ class Harvester:
                         c.move(dir)
                 return False
 
+    def _is_connected_to_base(self, c: Controller, bridge_id) -> bool:
+        """
+        Sigue la cadena de puentes desde bridge_id hasta su endpoint final.
+        Devuelve True si ese endpoint está en end_bridges (conectado a la base).
+        """
+        visited = set()
+        current_id = bridge_id
+
+        while current_id is not None:
+            pos = c.get_position(current_id)
+            if pos in visited:
+                break  # Ciclo inesperado; evitar bucle infinito
+            visited.add(pos)
+
+            endpoint = c.get_bridge_target(current_id)
+            if endpoint is None:
+                break
+
+            if endpoint in self.end_bridges:
+                return True
+
+            if not c.is_in_vision(endpoint):
+                break  # No podemos verificar más allá
+
+            next_id = c.get_tile_building_id(endpoint)
+            if next_id is None or c.get_entity_type(next_id) != EntityType.BRIDGE:
+                break  # La cadena termina aquí y no llegó a end_bridges
+
+            current_id = next_id
+
+        return False
+
     def _find_best_bridge_end(self, place: Position, c: Controller) -> Position | None:
-        """Selección O(n) sin llamadas al motor. Solo geometría."""
+        """
+        Primero intenta conectar a un puente aliado cercano que ya esté conectado
+        a la base. Si no encuentra ninguno, usa el comportamiento original
+        (apuntar directamente a end_bridges).
+        """
+        # ── 1. Buscar puentes aliados cercanos conectados a la base ──────────────
+        chain_candidates = []
+        builds = c.get_nearby_buildings()
+
+        for b in builds:
+            if c.get_team(b) != c.get_team():
+                continue
+            if c.get_entity_type(b) != EntityType.BRIDGE:
+                continue
+
+            b_pos = c.get_position(b)
+            if place.distance_squared(b_pos) > 9:
+                continue  # Fuera del alcance directo de un puente
+            if b_pos == self.last_bridge_end:
+                continue  # Evitar conectar al puente que acabamos de poner
+
+            if self._is_connected_to_base(c, b):
+                chain_candidates.append(b_pos)
+
+        # ── 2. Si hay candidatos de cadena, usar el más cercano a place ──────────
+        if chain_candidates:
+            chain_candidates.sort(key=lambda p: place.distance_squared(p))
+            return chain_candidates[0]
+
+        # ── 3. Comportamiento original: apuntar a end_bridges ────────────────────
         candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
         for end in candidates:
             if end == self.last_bridge_end:
                 continue
             if _is_in_bounds(c, end):
                 return end
+
         return None
 
     def _find_bridge_step(self, place: Position, target: Position, c: Controller) -> Position | None:
@@ -722,3 +911,5 @@ class Harvester:
                 best = b_pos
 
         return best
+    
+    

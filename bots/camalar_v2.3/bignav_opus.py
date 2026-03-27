@@ -3,6 +3,8 @@ import math
 import random
 
 
+
+
 def _is_diagonal(d: Direction) -> bool:
     dx, dy = d.delta()
     return dx != 0 and dy != 0
@@ -70,6 +72,35 @@ class BugNav:
         self._hand_switches += 1
         self.visitedStates.clear()
         self.wall_steps = 0
+
+    def is_reachable(self, c: Controller, goal: Position) -> bool:
+        """
+        Devuelve True si existe al menos un camino visible hasta goal.
+        Usa el mismo BFS interno pero solo comprueba si hay camino, no lo guarda.
+        """
+        current = c.get_position()
+        if current == goal:
+            return True
+
+        w, h = c.get_map_width(), c.get_map_height()
+        parent = {current: None}
+        queue = [current]
+
+        while queue:
+            pos = queue.pop(0)
+            if pos == goal:
+                return True
+            for d in self.dirs:
+                neighbor = pos.add(d)
+                if (neighbor not in parent
+                        and 0 <= neighbor.x < w and 0 <= neighbor.y < h
+                        and c.is_in_vision(neighbor)
+                        and (c.is_tile_passable(neighbor) or c.is_tile_empty(neighbor))):
+                    parent[neighbor] = (pos, d)
+                    queue.append(neighbor)
+
+        return False
+
 
     # ==========================
     # MAIN MOVE
