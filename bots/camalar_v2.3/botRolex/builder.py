@@ -107,7 +107,7 @@ def revisor_casillas_extractor (c: Controller, pos: Position):
         if _is_in_bounds(c, casilla):
             if c.is_in_vision(casilla):
                 building_id = c.get_tile_building_id(casilla)
-                if building_id is not None and c.get_entity_type(building_id) == EntityType.BRIDGE and c.get_team(building_id) == c.get_team():
+                if building_id is not None and c.get_entity_type(building_id) in (EntityType.BRIDGE, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER) and c.get_team(building_id) == c.get_team():
                     Existe = True
                     break
             else:
@@ -119,10 +119,7 @@ class Harvester:
     def __init__(self, c: Controller):
         self.objetivos = []
 
-         # Builder Vars
-        self.is_first_builder = False
-        self.is_first_harvester = True
-        self.first_bridge = None
+        # Builder Vars
         self.navegador = bugnav.BugNav()
         self.spawn = None
         self.conveyor_mode = False
@@ -130,11 +127,11 @@ class Harvester:
 
         self.end_bridges = []
         self.mode = 0
-            # mode 0: Find Ore
-            # mode 1: Place bridge near Ore
-            # mode 2: go home
-            # mode 3: revisar estructura
-            # mode 5: torretas en primer harvester
+            # mode 0: Find Ore (Blanco)
+            # mode 1: Place bridge near Ore (Verde)
+            # mode 2: go home (Rojo)
+            # mode 3: revisar estructura (Naranja)
+            # mode 5: torretas en primer harvester (Azul)
         self.last_bridge_end = None
         self.check_pos = None
 
@@ -167,29 +164,35 @@ class Harvester:
 
     def run(self, c: Controller):
         #logica del builder aqui
+        current = c.get_position()
         if self.mode == 1:
             # place bridge near ore
+            c.draw_indicator_dot(current, 24, 184, 69)
             self.place_bridge_ore(c)
             return
         elif self.mode == 2:
             # go home
+            c.draw_indicator_dot(current, 204, 16, 73)
             self.bridgeHome(c)
             return
         elif self.mode == 3:
             # Revisar camino a casa
+            c.draw_indicator_dot(current, 237, 129, 26)
             self.revisar_camino_casa(c)
             return
         elif self.mode == 5:
             # Reforzar Harvester
+            c.draw_indicator_dot(current, 26, 42, 219)
             self.reforzar_harvester(c)
             return
+        
+        c.draw_indicator_dot(current, 255, 255, 255)
 
         self.oreCerca(c)
-        current = c.get_position()
         target = None
         entityID = c.get_tile_building_id(current)
         tileTeam = c.get_team(entityID)
-        if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) in [EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER]:
+        if tileTeam is not None and tileTeam != c.get_team() and c.get_entity_type(entityID) in [EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER, EntityType.BRIDGE]:
             if c.can_fire(current):
                 c.fire(current)
             return
@@ -208,14 +211,9 @@ class Harvester:
             c.draw_indicator_line(current, move_pos, 66, 245, 39)
 
             if c.is_in_vision(target):
-                b_id = c.get_tile_building_id(target)
-                if c.get_entity_type(b_id) == EntityType.ROAD and c.get_team(b_id) == c.get_team() and c.can_destroy(target):
-                    c.destroy(target)
-
-                if current == target and (b_id is None or c.get_team(b_id) == c.get_team()):
-                    dir = self.navegador.moveExplore(c, False)
-                    if c.can_move(dir):
-                        c.move(dir)
+                build_id = c.get_tile_building_id(target)
+                if (build_id is not None and c.get_entity_type(build_id) != EntityType.HARVESTER) and not self._clear_tile(c, target):
+                    return # Aun no lo hemos roto
 
             if c.can_build_harvester(target):
                 c.build_harvester(target)
@@ -242,13 +240,6 @@ class Harvester:
                         self.recolectores.remove(target)
                     self.mode = 1
                     return
-                elif c.is_tile_passable(target) and b_id is not None and c.get_team(b_id) != c.get_team():
-                    if c.can_fire(target):
-                        c.fire(target)
-                    else:
-                        dir = self.navegador.moveTo(c, target, False)
-                        if c.can_move(dir):
-                            c.move(dir)
 
                 if target in self.objetivos:
                     self.objetivos.remove(target)
@@ -273,7 +264,7 @@ class Harvester:
             if _is_in_bounds(c, spot) and c.is_in_vision(spot):
                 something = c.get_tile_building_id(spot)
                 something2 = c.get_tile_env(spot)
-                if (something is None or c.is_tile_passable(spot)) and something2 != Environment.WALL:
+                if (something is None or (c.is_tile_passable(spot)) or spot == c.get_position()) and something2 != Environment.WALL:
                     if something2 not in [Environment.ORE_AXIONITE, Environment.ORE_TITANIUM]:
                         viable_places.append(spot)
                     else:
@@ -285,33 +276,25 @@ class Harvester:
             return
         
         current = c.get_position()
-        viable_places.sort(key=lambda p: current.distance_squared(p))
+        viable_places.sort(key=lambda p: self.spawn.distance_squared(p))
         place = viable_places[0]
         c.draw_indicator_dot(place, 0, 0, 0)
         dir = Direction.CENTRE
 
-        if self.is_first_harvester:
-            turret_places = extra_places_for_turrent
-            if len(viable_places) > 1:
-                for p in viable_places[1:]:
-                    turret_places.append(p)
-            
-            self.turret_places = turret_places
+        if place in self.end_bridges:
+            self.mode = 0
+            return
+
+        if c.is_in_vision(place):
+            if not self._clear_tile(c, place):
+                return # Aun no lo hemos roto
         
         if place == current:
             dir = self.navegador.moveTo(c, self.spawn, False)
             if c.can_move(dir):
                 c.move(dir)
         
-        quitar = c.get_tile_building_id(place)
-        if quitar is not None:
-            if c.can_destroy(place):
-                c.destroy(place)
-            else:
-                dir = self.navegador.moveTo(c, place, False)
-                if c.can_move(dir):
-                    c.move(dir)
-        elif current.distance_squared(place) > 2:
+        if current.distance_squared(place) > 2:
             dir = self.navegador.moveTo(c, place, False)
             if c.can_move(dir):
                 c.move(dir)
@@ -333,11 +316,6 @@ class Harvester:
                 self.last_bridge_end = None
             elif c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE:
                 self.mode = 3
-
-            if self.is_first_builder and self.is_first_harvester:
-                self.first_bridge = place
-                self.is_first_harvester = False
-                self.mode = 5
 
 
     def bridgeHome(self, c: Controller):
@@ -374,20 +352,9 @@ class Harvester:
 
         c.draw_indicator_dot(end, 255, 255, 0)
 
-        something = c.get_tile_building_id(bridge_end)
-        if something is not None: # Hay algo
-            if c.can_destroy(bridge_end):
-                c.destroy(bridge_end)
-            elif c.can_fire(bridge_end):
-                c.fire(bridge_end)
-            else:
-                dir = self.navegador.moveTo(c, bridge_end, False)
-                if c.can_move(dir):
-                    c.move(dir)
-                if c.can_destroy(bridge_end):
-                    c.destroy(bridge_end)
-                elif c.can_fire(bridge_end):
-                    c.fire(bridge_end)
+        if c.is_in_vision(bridge_end):
+            if not self._clear_tile(c, bridge_end):
+                return # Aun no lo hemos roto
 
         if c.can_build_bridge(bridge_end, end):
             c.build_bridge(bridge_end, end)
@@ -486,76 +453,51 @@ class Harvester:
 
         # Todo bien en este eslabón, avanzar
         self.check_pos = next_check            
-
-    # MODE 5
-
-    def reforzar_harvester(self, c: Controller):
-        self.turret_places.sort(key=lambda p: self.spawn.distance_squared(p))
+    
+    def _clear_tile(self, c: Controller, target: Position) -> bool:
+        """
+        Intenta eliminar lo que haya en `target`.
+        - Aliado: c.destroy() si estamos a distancia² <= 2.
+        - Enemigo: c.fire() solo si estamos encima (distancia² == 0).
         
-        if len(self.turret_places) == 0:
-            self.mode = 2
-            end = None
-            if c.is_in_vision(self.first_bridge):
-                end = c.get_bridge_target(c.get_tile_building_id(self.first_bridge))
-            
-            if end is not None and end in self.end_bridges:
-                self.mode = 0
-                self.last_bridge_end = None
-            return
-
-        #i = 0
-        place_to_build = None
-        t_place = self.turret_places[0]
-        #for t_place in  self.turret_places:
-            #i += 1
-        t_id = c.get_tile_building_id(t_place)
-        dir = t_place.direction_to(self.first_bridge)
-        #if i != 1:
-        #    dir = t_place.direction_to(self.spawn).opposite()
-        
-        if t_id is not None and c.get_entity_type(t_id) != EntityType.SENTINEL:
-            if c.can_destroy(t_place):
-                c.destroy(t_place)
-            if c.can_fire(t_place):
-                c.fire(t_place)
-
-        if c.can_build_sentinel(t_place, dir):
-            c.build_sentinel(t_place, dir)
-        elif place_to_build is None or c.get_entity_type(t_id) != EntityType.SENTINEL:
-            place_to_build = t_place
-
-        if place_to_build is None:
-            self.mode = 2
-            end = None
-            if c.is_in_vision(self.first_bridge):
-                end = c.get_bridge_target(c.get_tile_building_id(self.first_bridge))
-            
-            if end is not None and end in self.end_bridges:
-                self.mode = 0
-                self.last_bridge_end = None
-
-            return
+        Devuelve True si el tile ya está despejado (no hay nada),
+        False si aún queda algo (o no podemos actuar todavía).
+        En caso de que necesitemos acercarnos, hace el movimiento.
+        """
+        building_id = c.get_tile_building_id(target)
+        if building_id is None:
+            return True  # ya está libre
 
         current = c.get_position()
-        dist = current.distance_squared(place_to_build)
-        place_id = c.get_tile_building_id(place_to_build)
-        if dist > 2:
-            direc = self.navegador.moveTo(c, place_to_build, False)
-            move_pos = current.add(direc)
+        is_ally = c.get_team(building_id) == c.get_team()
 
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-
-            if c.can_move(direc) and (current.add(direc).distance_squared(place_to_build) != 0 or (place_id is not None and c.get_team(place_id) != c.get_team())):
-                c.move(direc)
-        elif dist == 0 and (place_id is None or c.get_team(place_id) == c.get_team()):
-            direc = self.navegador.moveTo(c, self.spawn, False)
-            move_pos = current.add(direc)
-
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-
-            if c.can_move(direc):
-                c.move(direc)
-
-        return
+        if is_ally:
+            if c.can_destroy(target):
+                c.destroy(target)
+                return True
+            # Nos acercamos para poder destruirlo (necesita dist² <= 2)
+            dir = self.navegador.moveTo(c, target, four_dirs=False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir):
+                c.move(dir)
+            return False
+        else:
+            # Enemigo: necesitamos estar encima
+            if current == target:
+                if c.can_fire(target):
+                    c.fire(target)
+                    # Comprobamos si ya lo hemos destruido
+                    return c.get_tile_building_id(target) is None
+                return False
+            else:
+                # Movernos encima si es posible
+                if c.is_tile_passable(target):
+                    dir = self.navegador.moveTo(c, target, four_dirs=False)
+                    next_pos = current.add(dir)
+                    if c.can_build_road(next_pos):
+                        c.build_road(next_pos)
+                    if c.can_move(dir):
+                        c.move(dir)
+                return False
