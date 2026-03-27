@@ -13,7 +13,7 @@ def _can_i_move(c: Controller, d: Direction):
     w = c.get_map_width()
     h = c.get_map_height()
 
-    if(nextPos.x >= 0 and nextPos.x < w and nextPos.y >= 0 and nextPos.y < h):
+    if nextPos.x >= 0 and nextPos.x < w and nextPos.y >= 0 and nextPos.y < h:
         return c.can_move(d) or c.is_tile_empty(nextPos) or c.is_tile_passable(nextPos)
     return False
 
@@ -32,9 +32,8 @@ class BugNav:
         self.wall_steps = 0
         self.max_wall_steps = 200
 
-        # M-line tolerance — más amplia para cubrir pasos diagonales
-        # Un paso diagonal sobre una línea recta puede desviarse hasta ~0.7
-        self.mline_epsilon = 0.25
+        # M-line tolerance
+        self.mline_epsilon = 0.7
 
         # Anti-oscillation
         self.lastLeaveDist = float("inf")
@@ -50,6 +49,13 @@ class BugNav:
         self._visited = set()
         self._frontiers = set()
         self._explore_target = None
+
+        # BFS config — radio de 4 celdas → 16 de distancia²
+        self._BFS_MAX_DIST = 16
+        self._bfs_path = []
+
+        # Random movement state
+        self.dvd = None
 
         self.reset()
 
@@ -79,6 +85,18 @@ class BugNav:
             self.prevGoal = goal
             self._hand_switches = 0
             self.lastLeaveDist = float("inf")
+            self._bfs_path = []
+
+        # Intenta BFS si el goal está dentro del radio
+        if current.distance_squared(goal) <= self._BFS_MAX_DIST:
+            self._bfs_path = self._bfs_to(c, goal)
+            if len(self._bfs_path) > 0:
+                next_dir = self._bfs_path[0]
+                if _can_i_move(c, next_dir):
+                    self._bfs_path.pop(0)
+                    return next_dir
+                else:
+                    self._bfs_path = []  # camino bloqueado, continúa con BugNav
 
         # ==========================
         # GO TO GOAL
@@ -87,13 +105,13 @@ class BugNav:
             dir_to_goal = current.direction_to(goal)
 
             flag = False
-            if(four_dirs and _is_diagonal(dir_to_goal)):
+            if four_dirs and _is_diagonal(dir_to_goal):
                 flag = True
                 dir_to_goal = dir_to_goal.rotate_left()
 
             if _can_i_move(c, dir_to_goal):
                 return dir_to_goal
-            elif(flag):
+            elif flag:
                 dir_to_goal = dir_to_goal.rotate_right().rotate_right()
                 if _can_i_move(c, dir_to_goal):
                     return dir_to_goal
@@ -102,7 +120,6 @@ class BugNav:
             self.mode = "WALL"
             self.hitPoint = current
             self.lastLeaveDist = current.distance_squared(goal)
-            # Si four_dirs, aseguramos que prevWallDir no sea diagonal
             if four_dirs and _is_diagonal(dir_to_goal):
                 dx, dy = dir_to_goal.delta()
                 if abs(dx) >= abs(dy):
@@ -144,8 +161,7 @@ class BugNav:
             self.reset()
             return greedy
 
-        # ── Condición de salida Bug2 ──────────────────────────────────────
-        # Usamos shouldLeaveWall (que antes no se llamaba nunca)
+        # Condición de salida Bug2
         if self.shouldLeaveWall(current, nextPos, goal, c):
             self.mode = "GOAL"
             self.visitedStates.clear()
@@ -163,19 +179,8 @@ class BugNav:
         if dir == Direction.CENTRE:
             return Direction.CENTRE
 
-        # Construye la lista de 7 candidatos (dejamos fuera la dirección
-        # completamente opuesta para no retroceder innecesariamente).
-        #
-        # Left-hand rule:  arrancamos 2 giros a la izquierda (90°) y
-        #                  rotamos hacia la derecha paso a paso (CW).
-        # Right-hand rule: arrancamos 2 giros a la derecha (90°) y
-        #                  rotamos hacia la izquierda paso a paso (CCW).
-        #
-        # Con rotate_left/rotate_right = 45°, 7 pasos cubren 315°,
-        # es decir todas las direcciones excepto la opuesta.
-
         if self._use_left_hand:
-            d = dir.rotate_left().rotate_left()   # arranca 90° izq
+            d = dir.rotate_left().rotate_left()
             for _ in range(7):
                 if not (four_dirs and _is_diagonal(d)):
                     if _can_i_move(c, d):
@@ -183,7 +188,7 @@ class BugNav:
                         return d
                 d = d.rotate_right()
         else:
-            d = dir.rotate_right().rotate_right()  # arranca 90° der
+            d = dir.rotate_right().rotate_right()
             for _ in range(7):
                 if not (four_dirs and _is_diagonal(d)):
                     if _can_i_move(c, d):
@@ -194,25 +199,12 @@ class BugNav:
         return Direction.CENTRE
 
     def _wall_priority(self, wall_dir: Direction, left_hand: bool) -> list:
-        """
-        Dado que la pared está en wall_dir, devuelve las direcciones
-        ordenadas de más pegada a la pared a más alejada.
-        Left-hand: gira preferentemente a la izquierda de la pared.
-        Right-hand: gira preferentemente a la derecha.
-        """
-        # Diagonales "pegadas" a la pared (tocan wall_dir)
-        diag_left  = wall_dir.rotate_left()   # 45° izq de la pared
-        diag_right = wall_dir.rotate_right()  # 45° der de la pared
-
-        # Perpendiculares (90° respecto a la pared)
-        perp_left  = wall_dir.rotate_left().rotate_left()   # 90° izq
-        perp_right = wall_dir.rotate_right().rotate_right() # 90° der
-
-        # Diagonales de huida (135°)
-        escape_left  = perp_left.rotate_left()   # 135° izq
-        escape_right = perp_right.rotate_right() # 135° der
-
-        # Opuesta (180°) — último recurso
+        diag_left  = wall_dir.rotate_left()
+        diag_right = wall_dir.rotate_right()
+        perp_left  = wall_dir.rotate_left().rotate_left()
+        perp_right = wall_dir.rotate_right().rotate_right()
+        escape_left  = perp_left.rotate_left()
+        escape_right = perp_right.rotate_right()
         opposite = wall_dir.rotate_left().rotate_left().rotate_left().rotate_left()
 
         if left_hand:
@@ -223,29 +215,22 @@ class BugNav:
                     escape_right, escape_left, opposite]
 
     # ==========================
-    # LEAVE CONDITION (Bug2) 
+    # LEAVE CONDITION (Bug2)
     # ==========================
     def shouldLeaveWall(self, current: Position, nextPos: Position,
                         goal: Position, c: Controller) -> bool:
-        # 1. nextPos debe estar sobre (o cerca de) la M-line
         if not self.onMline(nextPos, c):
             return False
-
-        # 2. Debe estar más cerca del objetivo que el hitPoint
         if nextPos.distance_squared(goal) >= self.hitPoint.distance_squared(goal):
             return False
-
-        # 3. Anti-oscilación: no debe ser peor que la última salida
         if nextPos.distance_squared(goal) >= self.lastLeaveDist:
             return False
-
         return True
 
     # ==========================
-    # M-LINE CHECK  ← tolerancia ajustada para diagonales
+    # M-LINE CHECK
     # ==========================
     def onMline(self, p: Position, c: Controller) -> bool:
-        # Distancia perpendicular punto-recta (más robusta que d1+d2≈d3)
         sx, sy = self.start.x, self.start.y
         gx, gy = self.prevGoal.x, self.prevGoal.y
         px, py = p.x, p.y
@@ -255,16 +240,14 @@ class BugNav:
         if length_sq == 0:
             return p == self.start
 
-        # Proyección escalar sobre la M-line
         t = ((px - sx)*dx + (py - sy)*dy) / length_sq
-        # Punto más cercano en la línea
         closest_x = sx + t*dx
         closest_y = sy + t*dy
 
         dist_perp = math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
 
         c.draw_indicator_line(self.start, self.prevGoal, 228, 245, 39)
-        return dist_perp < 1  # tolerancia perpendicular real
+        return dist_perp < 1
 
     # ==========================
     # GREEDY ESCAPE
@@ -292,10 +275,47 @@ class BugNav:
         return best_dir
 
     # ==========================
+    # BFS LOCAL
+    # ==========================
+    def _bfs_to(self, c: Controller, goal: Position) -> list:
+        """
+        BFS desde la posición actual hasta goal.
+        Solo expande celdas dentro del rango de visión del bot (información fiable).
+        Devuelve la lista de direcciones a seguir, o [] si no hay camino visible.
+        """
+        current = c.get_position()
+        w, h = c.get_map_width(), c.get_map_height()
+
+        # parent[pos] = (pos_anterior, direccion_tomada)
+        parent = {current: None}
+        queue = [current]
+
+        while queue:
+            pos = queue.pop(0)
+            if pos == goal:
+                # Reconstruye el camino hacia atrás
+                path = []
+                while parent[pos] is not None:
+                    prev, d = parent[pos]
+                    path.append(d)
+                    pos = prev
+                path.reverse()
+                return path
+
+            for d in self.dirs:
+                neighbor = pos.add(d)
+                if (neighbor not in parent
+                        and 0 <= neighbor.x < w and 0 <= neighbor.y < h
+                        and c.is_in_vision(neighbor)        # solo válido desde current
+                        and ((c.is_tile_passable(neighbor)) or c.is_tile_empty(neighbor))):  # solo válido desde current
+                    parent[neighbor] = (pos, d)
+                    queue.append(neighbor)
+
+        return []
+
+    # ==========================
     # RANDOM MOVEMENT
     # ==========================
-    dvd = None
-
     def moveDvD(self, c: Controller, four_dirs: bool):
         if self.dvd is None:
             self.dvd = random.choice(self.fdirs if four_dirs else self.dirs)
@@ -306,44 +326,72 @@ class BugNav:
         self.dvd = random.choice(self.fdirs if four_dirs else self.dirs)
         return self.dvd
 
-
-
+    # ==========================
+    # EXPLORATION
+    # ==========================
     def _update_exploration(self, c: Controller):
-        dirs = self.dirs
-        for tile in c.get_nearby_tiles():
-            pos = tile  # ajusta si es necesario
+        """Actualiza visited y frontiers con las celdas visibles ahora mismo."""
+        w, h = c.get_map_width(), c.get_map_height()
+
+        for pos in c.get_nearby_tiles():
             if pos not in self._visited:
                 self._visited.add(pos)
                 self._frontiers.discard(pos)
-                for d in dirs:
+
+                for d in self.dirs:
                     neighbor = pos.add(d)
-                    w, h = c.get_map_width(), c.get_map_height()
                     if (0 <= neighbor.x < w and 0 <= neighbor.y < h
                             and neighbor not in self._visited
                             and c.is_in_vision(neighbor)
                             and c.is_tile_passable(neighbor)):
                         self._frontiers.add(neighbor)
 
+    def _pick_explore_target(self, c: Controller) -> Position | None:
+        """Elige la frontera no visitada más cercana."""
+        if not self._frontiers:
+            return None
+        current = c.get_position()
+        return min(self._frontiers, key=lambda p: current.distance_squared(p))
+
+    def _invalidate_explore_target(self, c: Controller) -> bool:
+        """Devuelve True si el target actual ya no es válido."""
+        t = self._explore_target
+        return (t is None
+                or c.get_position() == t
+                or t in self._visited
+                or c.is_in_vision(t))
+
     def moveExplore(self, c: Controller, four_dirs: bool = False) -> Direction:
         self._update_exploration(c)
         current = c.get_position()
 
-        # Invalida el target si ya lo vemos o lo alcanzamos
-        if self._explore_target is not None:
-            if (current == self._explore_target
-                    or self._explore_target in self._visited
-                    or c.is_in_vision(self._explore_target)):
-                self._explore_target = None
-                self.reset()
-
-        # Elige nueva frontera más cercana
-        if self._explore_target is None:
-            if not self._frontiers:
-                return self.moveDvD(c, four_dirs)  # fallback: mapa explorado
-            self._explore_target = min(
-                self._frontiers,
-                key=lambda p: current.distance_squared(p)
-            )
+        # Descarta el target si ya no es válido
+        if self._invalidate_explore_target(c):
+            self._explore_target = None
+            self._bfs_path = []
             self.reset()
+
+        # Elige nueva frontera si no hay target
+        if self._explore_target is None:
+            self._explore_target = self._pick_explore_target(c)
+            self._bfs_path = []
+            self.reset()
+
+            if self._explore_target is None:
+                return self.moveDvD(c, four_dirs)  # fallback: sin fronteras
+
+        # Intenta BFS si el target está dentro del radio y no hay camino calculado
+        if (current.distance_squared(self._explore_target) <= self._BFS_MAX_DIST
+                and not self._bfs_path):
+            self._bfs_path = self._bfs_to(c, self._explore_target)
+
+        # Sigue el camino BFS si existe y el siguiente paso es válido
+        if self._bfs_path:
+            next_dir = self._bfs_path[0]
+            if _can_i_move(c, next_dir):
+                self._bfs_path.pop(0)
+                return next_dir
+            else:
+                self._bfs_path = []  # camino bloqueado, delega a BugNav
 
         return self.moveTo(c, self._explore_target, four_dirs)
