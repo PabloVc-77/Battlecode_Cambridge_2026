@@ -45,7 +45,7 @@ class Player:
                 if round > 50 and ct.get_id() % 3 != 0:
                    self.brain = Torreta(ct) # torreta
                 elif round == 1:
-                    self.brain =  Defensivo(ct) # defensivo
+                    self.brain = Defensivo(ct) # defensivo
                 else:
                     self.brain = Harvester(ct) # normal
 

@@ -25,6 +25,9 @@ def _find_viable_bridge_end(end_of_bridges, place: Position, candidates: list, c
 
     return best_chained  # solo si no hubo ningún directo
 
+
+
+#Dividido ahora en dos fases: _find_best_bridge_end (barato) y _find_bridge_step (cara y solo si no llega a poner directamente)
 def _get_end_of_bridge(end_bridges, place: Position, target: Position, c: Controller) -> Position | None:
     dx = target.x - place.x
     dy = target.y - place.y
@@ -296,6 +299,7 @@ class Harvester:
                 c.build_road(move_pos)
             if c.can_move(dir):
                 c.move(dir)
+            return
 
         if current.distance_squared(place) > 2:
             dir = self.navegador.moveTo(c, place, False)
@@ -304,12 +308,24 @@ class Harvester:
                 c.build_road(move_pos)
             if c.can_move(dir):
                 c.move(dir)
+            return
 
-        self.end_bridges.sort(key=lambda p: place.distance_squared(p))
-        end = _find_viable_bridge_end(self.end_bridges, place, self.end_bridges, c)
-        if end is None:
+        # --- Selección del destino (barata, sin llamadas al motor) ---
+        target_end = self._find_best_bridge_end(place, c)
+        if target_end is None:
             self.mode = 0
             return
+
+        c.draw_indicator_dot(target_end, 255, 255, 255)
+
+        # --- Solo si el puente directo no alcanza, buscar paso intermedio ---
+        if c.can_build_bridge(place, target_end):
+            end = target_end
+        else:
+            end = self._find_bridge_step(place, target_end, c)
+            if end is None:
+                self.mode = 0
+                return
 
         c.draw_indicator_dot(end, 255, 255, 255)
         if c.can_build_bridge(place, end):
@@ -350,10 +366,10 @@ class Harvester:
             return
 
         # En anchor — colocar siguiente puente
-        self.end_bridges.sort(key=lambda p: bridge_end.distance_squared(p))
-        end = _find_viable_bridge_end(self.end_bridges, bridge_end, self.end_bridges, c)
+         # --- Selección del destino (barata, sin llamadas al motor) ---
+        target_end = self._find_best_bridge_end(bridge_end, c)
 
-        if end is None:
+        if target_end is None:
             dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
             next_pos = current.add(dir)
             if c.can_build_road(next_pos):
@@ -362,12 +378,26 @@ class Harvester:
                 c.move(dir)
             return
 
-        c.draw_indicator_dot(end, 255, 255, 0)
+        c.draw_indicator_dot(target_end, 255, 255, 0)
 
         if c.is_in_vision(bridge_end):
             if not self._clear_tile(c, bridge_end):
                 return  # Aún no lo hemos roto
 
+         # --- Solo si el puente directo no alcanza, buscar paso intermedio ---
+        if c.can_build_bridge(bridge_end, target_end):
+            end = target_end
+        else:
+            end = self._find_bridge_step(bridge_end, target_end, c)
+            if end is None:
+                dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
+                next_pos = current.add(dir)
+                if c.can_build_road(next_pos):
+                    c.build_road(next_pos)
+                if c.can_move(dir):
+                    c.move(dir)
+                return
+                
         if c.can_build_bridge(bridge_end, end):
             c.build_bridge(bridge_end, end)
             self.last_bridge_end = end
@@ -650,3 +680,60 @@ class Harvester:
                     if c.can_move(dir):
                         c.move(dir)
                 return False
+
+    def _find_best_bridge_end(self, place: Position, c: Controller) -> Position | None:
+        """Selección O(n) sin llamadas al motor. Solo geometría."""
+        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
+        for end in candidates:
+            if end == self.last_bridge_end:
+                continue
+            if _is_in_bounds(c, end):
+                return end
+        return None
+
+    def _find_bridge_step(self, place: Position, target: Position, c: Controller) -> Position | None:
+        """Solo se ejecuta si el puente directo no alcanza. Bucle 7x7 acotado."""
+        # ... bucle 7x7 igual que antes pero SIN get_nearby_buildings dentro
+        # Los puentes existentes se comprueban solo contra self.end_bridges
+        dx = target.x - place.x
+        dy = target.y - place.y
+        dist = math.sqrt(dx * dx + dy * dy)
+        ux, uy = dx / dist, dy / dist
+
+        best = None
+        best_score = None
+
+        for ddx in range(-3, 4):
+            for ddy in range(-3, 4):
+                d_sq = ddx * ddx + ddy * ddy
+                if d_sq == 0 or d_sq > 9:
+                    continue
+                dot = ddx * ux + ddy * uy
+                if dot <= 0:
+                    continue
+
+                candidate = Position(place.x + ddx, place.y + ddy)
+                if not _is_in_bounds(c, candidate) or not c.is_in_vision(candidate):
+                    continue
+
+                env = c.get_tile_env(candidate)
+                if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE, Environment.WALL):
+                    continue
+
+                building_id = c.get_tile_building_id(candidate)
+                if building_id is not None:
+                    entity_type = c.get_entity_type(building_id)  # cachear aquí
+                    if c.get_team(building_id) != c.get_team() and not c.is_tile_passable(candidate):
+                        continue
+                    if entity_type not in (EntityType.ROAD, EntityType.CONVEYOR,
+                                        EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER,
+                                        EntityType.FOUNDRY):
+                        continue
+
+                remaining_sq = candidate.distance_squared(target)
+                score = (-remaining_sq, dot)
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best = candidate
+
+        return best
