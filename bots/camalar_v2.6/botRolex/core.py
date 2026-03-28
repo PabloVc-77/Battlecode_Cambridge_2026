@@ -11,10 +11,18 @@ def run_core(self, c: Controller):
     #units = c.get_unit_count()
     #pos = Position(units % c.get_map_width(), (int)(units / c.get_map_width()) % c.get_map_height())
     #c.draw_indicator_dot(pos, 39, 224, 245)
+    width = c.get_map_width()
+    if width > 20:
+        if self.num_spawned < 3:
+            spawnBuilder(c)
+            self.num_spawned += 1
+    else:
+        if self.num_spawned < 4:
+            spawnBuilder(c)
+            self.num_spawned += 1
 
-    if self.num_spawned < 3:
-        spawnBuilder(c)
-        self.num_spawned += 1
+
+    
         
     recursos = c.get_global_resources()
 

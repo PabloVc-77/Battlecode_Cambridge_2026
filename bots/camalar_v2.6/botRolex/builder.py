@@ -212,7 +212,10 @@ class Harvester:
         # Restaurar barriers temporalmente destruidas para pasar
         self._restore_barriers(c)
         current = c.get_position()
-
+        
+        if c.can_heal(current):
+            c.heal(current)
+        
         if self.mode == 1:
             c.draw_indicator_dot(current, 24, 184, 69)
             self.place_bridge_ore(c)

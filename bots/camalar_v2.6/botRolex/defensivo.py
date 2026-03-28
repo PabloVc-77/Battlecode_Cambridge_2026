@@ -79,6 +79,7 @@ class Defensivo:
 
     def run(self, c: Controller):
 
+
         if(self.my_core is None):
             casillas = c.get_nearby_buildings()
             #obtener posición del nodo
@@ -93,8 +94,12 @@ class Defensivo:
         nodePosition = c.get_position(self.my_core)
         if(c.get_hp(self.my_core) < c.get_max_hp(self.my_core) and c.can_heal(nodePosition)):
             c.heal(nodePosition)
-
+        
         current = c.get_position()
+        
+        if c.can_heal(current):
+            c.heal(current)
+
         direc = current.direction_to(nodePosition)
 
         # AXIONITE MISION
@@ -122,7 +127,8 @@ class Defensivo:
 
             if c.can_destroy(obj):
                 c.destroy(obj)
-
+            elif c.can_fire(obj):
+                c.fire(obj)
             if c.can_build_armoured_conveyor(obj, cdir):
                 c.build_armoured_conveyor(obj, cdir)
             elif c.can_build_conveyor(obj, cdir):
