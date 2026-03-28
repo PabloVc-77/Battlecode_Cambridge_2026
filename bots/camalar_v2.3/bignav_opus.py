@@ -2,9 +2,6 @@ from cambc import Controller, Direction, Position
 import math
 import random
 
-
-
-
 def _is_diagonal(d: Direction) -> bool:
     dx, dy = d.delta()
     return dx != 0 and dy != 0
@@ -118,8 +115,9 @@ class BugNav:
             self._bfs_path = []
 
         # Intenta BFS si el goal está dentro del radio
-        if current.distance_squared(goal) <= self._BFS_MAX_DIST:
-            self._bfs_path = self._bfs_to(c, goal)
+        if current.distance_squared(goal) <= self._BFS_MAX_DIST or len(self._bfs_path) > 0:
+            if len(self._bfs_path) == 0:
+                self._bfs_path = self._bfs_to(c, goal)
             if len(self._bfs_path) > 0:
                 next_dir = self._bfs_path[0]
                 if _can_i_move(c, next_dir):

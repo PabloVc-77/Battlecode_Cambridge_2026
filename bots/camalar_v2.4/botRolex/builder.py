@@ -52,6 +52,8 @@ class Harvester:
         self.last_bridge_built_pos = None
         self.check_pos = None
 
+        self.sentinel_placed = False
+
         #Variables de puentes
         self.pending_barrier_pos = None   # casilla donde hay que poner la barrier adelantada
         self.mode_after_barrier = 1       # modo al que volver tras completar el modo 8
@@ -425,6 +427,13 @@ class Harvester:
                         elif tile in self.recolectores:
                             self.recolectores.remove(tile)
                         continue
+                    elif tile in self.recolectores:
+                        self.recolectores.remove(tile)
+                        continue
+                    elif tile in self.objetivos:
+                        self.objetivos.remove(tile)
+                        continue
+
 
                 if tile not in self.objetivos:
                     self.objetivos.append(tile)
@@ -645,56 +654,55 @@ class Harvester:
             harvester_pos.add(Direction.WEST),
         ]
 
+        # Determinar cuál casilla es la del puente (la más cercana a last_bridge_built_pos)
+        sentinel_spot = None
+        if self.last_bridge_built_pos is not None and not self.sentinel_placed:
+            closest = min(
+                [p for p in candidates if _is_in_bounds(c, p) and self.last_bridge_built_pos != p and c.is_in_vision(p) and (c.is_tile_passable(p) or c.is_tile_empty(p))],
+                key=lambda p: p.distance_squared(self.last_bridge_built_pos),
+                default=None
+            )
+            sentinel_spot = closest
+
         for objetivo in candidates:
             if not _is_in_bounds(c, objetivo):
                 continue
+
+            # Acercarnos si no está en visión
             if not c.is_in_vision(objetivo):
                 dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
                 if c.can_move(dir):
                     c.move(dir)
                 return
+
             if c.get_tile_env(objetivo) == Environment.WALL:
                 continue
 
             building_id = c.get_tile_building_id(objetivo)
+            edificio_deseado = EntityType.SENTINEL if objetivo == sentinel_spot else EntityType.BARRIER
+
             if building_id is not None:
                 entity = c.get_entity_type(building_id)
                 team = c.get_team(building_id)
 
-                # Ya hay torreta propia: terminado
-                if entity == EntityType.SENTINEL and team == c.get_team():
-                    self.mode = 6
-                    return
-
-                # Es el puente recién construido: saltamos esta casilla
-                if entity == EntityType.BRIDGE and team == c.get_team():
+                # Ya tiene lo que queremos: casilla resuelta
+                if entity == edificio_deseado and team == c.get_team():
                     continue
 
-                # Hay una barrier propia: quitarla para poner la torreta aquí
-                if entity == EntityType.BARRIER and team == c.get_team():
-                    current = c.get_position()
-                    if current.distance_squared(objetivo) > 2:
-                        dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
-                        if c.can_move(dir):
-                            c.move(dir)
-                        return
-                    if c.can_destroy(objetivo):
-                        c.destroy(objetivo)
-                    return  # Turno siguiente: casilla libre, construiremos la torreta
+                if entity in (EntityType.BRIDGE, EntityType.SENTINEL) and team == c.get_team():
+                    continue
 
-                # Cualquier otra estructura: saltamos
-                continue
+                # Estructura enemiga: intentar destruirla
+                if not self._clear_tile(c, objetivo):
+                    return
 
-            # Casilla vacía: construir torreta directamente
-            resultado = self.construir(c, objetivo, EntityType.SENTINEL)
+            # Casilla vacía o recién liberada: construir lo que toca
+            resultado = self.construir(c, objetivo, edificio_deseado)
             if not resultado:
                 return
 
-            # Si llegamos aquí, construir devolvió True → torreta puesta
-            self.mode = 6
-            return
-
-        # Si iteramos todas sin construir (todas son puentes/muros): pasar igualmente
+        # Todas las casillas resueltas
+        self.sentinel_placed = False
         self.mode = 6
 
     # MODE 8
@@ -830,6 +838,14 @@ class Harvester:
                 c.move(dir)
             return False
 
+        if current == objetivo:
+            dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir):
+                c.move(dir)
+
         # En rango: construir según el tipo de edificio
         if edificio == EntityType.BARRIER and c.can_build_barrier(objetivo):
             c.build_barrier(objetivo)
@@ -845,6 +861,7 @@ class Harvester:
                 dir_torreta = dir_torreta.rotate_left()
             if c.can_build_sentinel(objetivo, dir_torreta):
                 c.build_sentinel(objetivo, dir_torreta)
+                self.sentinel_placed = True
                 return True
 
         return False
