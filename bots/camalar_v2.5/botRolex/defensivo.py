@@ -1,4 +1,4 @@
-from cambc import Controller, Direction, EntityType, Position
+from cambc import Controller, Direction, EntityType, Environment, Position
 import bignav_opus as bugnav
 
 # ---------------------------------------------------------------------------
@@ -9,80 +9,75 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
     return 0 <= pos.x < c.get_map_width() and 0 <= pos.y < c.get_map_height()
 
 
+
+
 # ---------------------------------------------------------------------------
 # Base layout
 # ---------------------------------------------------------------------------
 #
-# Coordinate system: Y increases UPWARD (mathematical convention).
+# Coordinate system: NORTH = -dy  (Y increases DOWNWARD on screen).
 # node_pos = CENTER tile of the 3×3 core.
 # Core tiles occupy dx ∈ [-1,+1], dy ∈ [-1,+1].
 #
-# Diagram read top-to-bottom on screen = high-Y to low-Y in math coords:
+# Diagram (screen top = smaller dy = NORTH):
 #
 #   dy   dx: -2  -1   0  +1  +2  +3
-#   +3:  [  ][T^][  ][T^][  ][  ]
-#   +2:  [X ][<S][ F][<S*][*Sv][T>]
-#   +1:  [X ][C ][C ][C  ][CYv][  ]
-#    0:  [X ][C ][C ][C  ][Sv ][T> ]  ← node_pos.y (core center row)
-#   -1:  [X ][C ][C ][C  ][X  ][  ]
-#   -2:  [X ][X ][X ][X  ][X  ][  ]
+#   -3:  [  ][T^][  ][T^][  ][  ]
+#   -2:  [X ][<S][ F][<S*][*Sv][T>]
+#   -1:  [X ][C ][C ][C  ][CYv][  ]
+#    0:  [X ][C ][C ][C  ][Sv ][T> ]  ← node_pos (core center)
+#   +1:  [X ][C ][C ][C  ][X  ][  ]
+#   +2:  [X ][X ][X ][X  ][X  ][  ]
 #
-# X-blocks are to the LEFT (dx=-2) and BELOW (dy=-2).
-# Payload extends RIGHT (+dx) and UP (+dy).
-#
-# Sentinels point AWAY from the X-block corner:
-#   T^  → NORTH (+dy, up)    away from X-blocks below
-#   T>  → EAST  (+dx, right) away from X-blocks on left
-# After rotation these keep pointing away from the X corner → toward center.
+# X-blocks: LEFT (dx=-2) and SOUTH/down (dy=+2).
+# Payload: RIGHT (+dx) and NORTH/up (-dy).
 #
 # Entry: (dx, dy, EntityType, build_fn, Direction, priority)
-#   priority 0 = built first (starred *)
 
 BASE_LAYOUT = [
     # Priority 0 — starred: resource entry splitters
-    ( 1,  2, EntityType.SPLITTER, "splitter", Direction.EAST,  0),  # <S*
-    ( 2,  2, EntityType.SPLITTER, "splitter", Direction.SOUTH, 0),  # *Sv  SOUTH=-y = toward core row
+    ( 1, -2, EntityType.SPLITTER, "splitter", Direction.WEST,  0),  # <S*
+    ( 2, -2, EntityType.SPLITTER, "splitter", Direction.SOUTH, 0),  # *Sv  SOUTH=+dy toward core
 
     # Priority 1 — foundry chain
-    (-1,  2, EntityType.SPLITTER, "splitter", Direction.EAST,  1),  # <S
-    ( 0,  2, EntityType.FOUNDRY,  "foundry",  Direction.NORTH, 1),  # F
+    (-1, -2, EntityType.SPLITTER, "splitter", Direction.WEST,  1),  # <S
+    ( 0, -2, EntityType.FOUNDRY,  "foundry",  Direction.NORTH, 1),  # F
 
-    # Priority 2 — conveyor + splitter feeding the starred splitters
-    ( 2,  1, EntityType.CONVEYOR, "conveyor", Direction.SOUTH, 2),  # CYv SOUTH=down toward Sv
-    ( 2,  0, EntityType.SPLITTER, "splitter", Direction.SOUTH, 2),  # Sv  SOUTH=down toward core-bot
+    # Priority 2 — conveyor + splitter feeding down toward core
+    ( 2, -1, EntityType.CONVEYOR, "conveyor", Direction.SOUTH, 2),  # CYv SOUTH=+dy toward Sv
+    ( 2,  0, EntityType.SPLITTER, "splitter", Direction.SOUTH, 2),  # Sv  SOUTH=+dy toward core-bot
 
     # Priority 3 — sentinels
-    (-1,  3, EntityType.SENTINEL, "sentinel", Direction.NORTH, 3),  # T^ upper-left
-    ( 1,  3, EntityType.SENTINEL, "sentinel", Direction.NORTH, 3),  # T^ upper-right
-    ( 3,  2, EntityType.SENTINEL, "sentinel", Direction.WEST,  3),  # T> right-top
-    ( 3,  0, EntityType.SENTINEL, "sentinel", Direction.WEST,  3),  # T> right-bottom
+    (-1, -3, EntityType.SENTINEL, "sentinel", Direction.NORTH, 3),  # T^ upper-left
+    ( 1, -3, EntityType.SENTINEL, "sentinel", Direction.NORTH, 3),  # T^ upper-right
+    ( 3, -2, EntityType.SENTINEL, "sentinel", Direction.EAST,  3),  # T> right-top
+    ( 3,  0, EntityType.SENTINEL, "sentinel", Direction.EAST,  3),  # T> right-bottom
 ]
 
 
 # ---------------------------------------------------------------------------
-# Rotation system  (Y-up mathematical convention)
+# Rotation system  (Y-down: NORTH = -dy)
 # ---------------------------------------------------------------------------
 #
-# Rotations are named by their VISUAL effect on screen.
-# With Y-up, screen-CW maps to mathematical-CCW, but we keep visual naming.
+# With Y-down, a clockwise rotation on screen sends:
+#   NORTH vector (0,-1) → EAST (1,0)    [up-screen → right]
+#   EAST  vector (1, 0) → SOUTH (0,1)   [right → down-screen]
 #
-#   R0     identity            (dx,dy)→( dx,  dy)   payload: right+UP   (+x,+y)
-#   R_CW   90° CW on screen    (dx,dy)→( dy, -dx)   payload: right+DOWN (+x,-y)
-#   R180   180°                (dx,dy)→(-dx, -dy)   payload: left+DOWN  (-x,-y)
-#   R_CCW  90° CCW on screen   (dx,dy)→(-dy,  dx)   payload: left+UP    (-x,+y)
+# This gives matrix CW: (dx,dy) → (−dy, dx)   i.e. (a,b,c,d) = (0,−1,1,0)
+# And matrix CCW:       (dx,dy) → ( dy,−dx)   i.e. (a,b,c,d) = (0, 1,−1,0)
 #
-# Matrix (a,b,c,d): new_dx = a*dx + b*dy,  new_dy = c*dx + d*dy
+# Verified: R_CW × R_CW = R180 ✓
 
 _MAT = {
     "R0":    ( 1,  0,  0,  1),
-    "R_CW":  ( 0,  1, -1,  0),   # screen-CW,  Y-up: (dx,dy)→( dy,-dx)
+    "R_CW":  ( 0, -1,  1,  0),   # CW  screen Y-down: (dx,dy) → (−dy,  dx)
     "R180":  (-1,  0,  0, -1),
-    "R_CCW": ( 0, -1,  1,  0),   # screen-CCW, Y-up: (dx,dy)→(-dy, dx)
+    "R_CCW": ( 0,  1, -1,  0),   # CCW screen Y-down: (dx,dy) → ( dy, −dx)
 }
 
-# Direction remappings under each rotation (screen-CW convention, Y-up)
-# Screen-CW:  N→E, E→S, S→W, W→N
-# Screen-CCW: N→W, W→S, S→E, E→N
+# Direction remappings — effect on cardinal directions under each rotation:
+#   CW:  N→E, E→S, S→W, W→N
+#   CCW: N→W, W→S, S→E, E→N
 _DIR_MAP = {
     "R0":    {Direction.NORTH: Direction.NORTH, Direction.EAST:  Direction.EAST,
               Direction.SOUTH: Direction.SOUTH, Direction.WEST:  Direction.WEST},
@@ -94,17 +89,17 @@ _DIR_MAP = {
               Direction.SOUTH: Direction.EAST,  Direction.WEST:  Direction.SOUTH},
 }
 
-# Direction the payload cluster lies after each rotation (sign of centroid).
-# Empirically derived from BASE_LAYOUT offsets:
-#   R0    → (+x,+y)   right+up
-#   R_CW  → (+x,-y)   right+down
-#   R180  → (-x,-y)   left+down
-#   R_CCW → (-x,+y)   left+up
+# Sign of payload centroid after each rotation (empirically verified).
+# Used to score how well the rotated layout faces the map center.
+#   R0    → (+x, −y)   right+north  (payload up-right on screen)
+#   R_CW  → (+x, +y)   right+south  (payload down-right on screen)
+#   R180  → (−x, +y)   left+south   (payload down-left on screen)
+#   R_CCW → (−x, −y)   left+north   (payload up-left on screen)
 _ROT_EXTENDS = {
-    "R0":    ( 1,  1),
-    "R_CW":  ( 1, -1),
-    "R180":  (-1, -1),
-    "R_CCW": (-1,  1),
+    "R0":    ( 1, -1),
+    "R_CW":  ( 1,  1),
+    "R180":  (-1,  1),
+    "R_CCW": (-1, -1),
 }
 
 _ROTATIONS = list(_MAT.keys())
@@ -122,20 +117,25 @@ def _rotate_dir(direction: Direction, rot: str) -> Direction:
 def _score_rotation(c: Controller, node_pos: Position, rot: str) -> tuple:
     """
     Score a rotation candidate.
-    Primary:   number of layout slots that fall inside the map bounds.
+    Primary:   number of layout slots inside map bounds.
     Tiebreak:  dot(core→center, rot_extends) — payload faces map center.
     Higher tuple = better.
     """
     in_bounds = 0
     for (dx, dy, *_) in BASE_LAYOUT:
         rdx, rdy = _rotate_offset(dx, dy, rot)
-        if _is_in_bounds(c, Position(node_pos.x + rdx, node_pos.y + rdy)):
-            in_bounds += 1
+        slot = Position(node_pos.x + rdx, node_pos.y + rdy)
+        if not _is_in_bounds(c, slot):
+            continue
+        # Penalise slots that are already visible and are WALLs
+        if c.is_in_vision(slot) and c.get_tile_env(slot) == Environment.WALL:
+            continue
+        in_bounds += 1
 
     cx = c.get_map_width()  / 2.0
     cy = c.get_map_height() / 2.0
     vec_x = cx - node_pos.x   # + = center is to the right
-    vec_y = cy - node_pos.y   # + = center is above (Y-up)
+    vec_y = cy - node_pos.y   # + = center is BELOW (Y-down)
     ex, ey = _ROT_EXTENDS[rot]
     dot = vec_x * ex + vec_y * ey
 
@@ -143,10 +143,6 @@ def _score_rotation(c: Controller, node_pos: Position, rot: str) -> tuple:
 
 
 def _choose_rotation(c: Controller, node_pos: Position) -> str:
-    """
-    Pick the rotation that maximises in-bounds slots, breaking ties by
-    how well the layout's payload faces the map center.
-    """
     return max(_ROTATIONS, key=lambda r: _score_rotation(c, node_pos, r))
 
 
@@ -160,7 +156,7 @@ def _build_rotated_layout(rotation: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Build dispatcher
+# Build helpers
 # ---------------------------------------------------------------------------
 
 def _building_matches(c: Controller, building_id, expected_type: EntityType,
@@ -189,17 +185,13 @@ class Defensivo:
     def __init__(self, ct: Controller):
         self.navegador = bugnav.BugNav()
         self.my_core = None
-        self.rotation = None   # chosen once on first run
-        self.layout = None     # pre-sorted rotated layout cache
+        self.rotation = None
+        self.layout = None
 
         for b in ct.get_nearby_buildings():
             if ct.get_entity_type(b) == EntityType.CORE:
                 self.my_core = b
                 break
-
-    # ------------------------------------------------------------------
-    # Public entry point
-    # ------------------------------------------------------------------
 
     def run(self, c: Controller):
         # 1) Locate core
@@ -213,7 +205,7 @@ class Defensivo:
 
         node_pos = c.get_position(self.my_core)
 
-        # 2) Choose and cache rotation once (needs live map dimensions)
+        # 2) Choose rotation once
         if self.rotation is None:
             self.rotation = _choose_rotation(c, node_pos)
             self.layout = sorted(
@@ -236,31 +228,25 @@ class Defensivo:
         else:
             self._idle_move(c, node_pos)
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _find_next_build_target(self, c: Controller, node_pos: Position):
-        """
-        Walk the priority-sorted layout and return the first incomplete slot.
-        Out-of-vision slots are deferred (we move toward the first one found).
-        """
         out_of_vision_fallback = None
         for entry in self.layout:
             dx, dy, entity_type, build_fn, direction, _p = entry
             slot_pos = Position(node_pos.x + dx, node_pos.y + dy)
 
             if not _is_in_bounds(c, slot_pos):
-                continue  # permanently skip
-
+                continue
             if not c.is_in_vision(slot_pos):
                 if out_of_vision_fallback is None:
                     out_of_vision_fallback = entry
                 continue
+            # Skip permanently if the tile is a WALL
+            if c.get_tile_env(slot_pos) == Environment.WALL:
+                continue
 
             building_id = c.get_tile_building_id(slot_pos)
             if _building_matches(c, building_id, entity_type, direction):
-                continue  # slot complete
+                continue
 
             return entry
 
@@ -269,7 +255,6 @@ class Defensivo:
     def _work_on_slot(self, c: Controller, slot_pos: Position,
                       entity_type: EntityType, build_fn: str,
                       direction: Direction):
-        """Clear wrong occupant then build; move closer if out of range."""
         current = c.get_position()
         building_id = c.get_tile_building_id(slot_pos)
 
@@ -294,11 +279,37 @@ class Defensivo:
             if c.can_move(direc):
                 c.move(direc)
 
+    def _try_build(self, c: Controller, pos: Position, build_type: str,
+                   direction: Direction) -> bool:
+        # Can't build on our own tile — move away first
+        if pos == c.get_position():
+            dir_ = self.navegador.moveTo(c, c.get_position(self.my_core), four_dirs=False)
+            if c.can_move(dir_):
+                c.move(dir_)
+            return False
+
+        if build_type == "splitter":
+            if c.can_build_splitter(pos, direction):
+                c.build_splitter(pos, direction)
+                return True
+        elif build_type == "foundry":
+            if c.can_build_foundry(pos):
+                c.build_foundry(pos)
+                return True
+        elif build_type == "conveyor":
+            if c.can_build_armoured_conveyor(pos, direction):
+                c.build_armoured_conveyor(pos, direction)
+                return True
+            if c.can_build_conveyor(pos, direction):
+                c.build_conveyor(pos, direction)
+                return True
+        elif build_type == "sentinel":
+            if c.can_build_sentinel(pos, direction):
+                c.build_sentinel(pos, direction)
+                return True
+        return False
+
     def _clear_tile(self, c: Controller, target: Position) -> bool:
-        """
-        Remove whatever occupies `target`.
-        Returns True when free, False when more turns are needed.
-        """
         building_id = c.get_tile_building_id(target)
         if building_id is None:
             return True
@@ -331,32 +342,3 @@ class Defensivo:
                 if c.can_move(dir_):
                     c.move(dir_)
             return False
-        
-    def _try_build(self, c: Controller, pos: Position, build_type: str,
-               direction: Direction) -> bool:
-        
-        if pos == c.get_position:
-            dir = self.navegador.moveTo(self.my_core)
-            if c.can_move(dir):
-                c.move(dir)
-
-        if build_type == "splitter":
-            if c.can_build_splitter(pos, direction):
-                c.build_splitter(pos, direction)
-                return True
-        elif build_type == "foundry":
-            if c.can_build_foundry(pos):
-                c.build_foundry(pos)
-                return True
-        elif build_type == "conveyor":
-            if c.can_build_armoured_conveyor(pos, direction):
-                c.build_armoured_conveyor(pos, direction)
-                return True
-            if c.can_build_conveyor(pos, direction):
-                c.build_conveyor(pos, direction)
-                return True
-        elif build_type == "sentinel":
-            if c.can_build_sentinel(pos, direction):
-                c.build_sentinel(pos, direction)
-                return True
-        return False
