@@ -32,9 +32,7 @@ def run_sentinel(self, c: Controller):
                 pos.add(Direction.WEST),
                 pos.add(Direction.EAST),
             ]
-            adjacentes.sort(key=lambda p: (
-                (p.x - c.get_position().x) ** 2 + (p.y - c.get_position().y) ** 2
-            ))
+            adjacentes.sort(key=lambda p: c.get_position().distance_squared(p))
             for adj in adjacentes:
                 if c.can_fire(adj):
                     c.fire(adj)
@@ -43,6 +41,8 @@ def run_sentinel(self, c: Controller):
             if c.can_fire(pos):
                 c.fire(pos)
             return
+        
+        c.draw_indicator_dot(pos, 0, 0, 0)
 
         if c.can_fire(pos):
             c.fire(pos)

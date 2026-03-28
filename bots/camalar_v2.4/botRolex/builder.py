@@ -112,6 +112,7 @@ class Harvester:
         elif self.mode == 7:
             c.draw_indicator_dot(current, 100, 200, 200)
             self.colocar_defensas(c, self.current_target)
+            return
         elif self.mode == 8:
             c.draw_indicator_dot(current, 180, 0, 180)  # morado
             self.poner_barrier_adelantada(c)
