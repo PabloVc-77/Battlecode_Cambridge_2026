@@ -804,10 +804,14 @@ class Harvester:
             harvester_pos.add(Direction.SOUTH),
             harvester_pos.add(Direction.WEST),
         ]
+        ore = None
+        if c.is_in_vision(harvester_pos):
+            ore = c.get_tile_env(harvester_pos)
+        ore_bool = ore is not None and ore != Environment.ORE_AXIONITE
 
         # Determinar cuál casilla es la del puente (la más cercana a last_bridge_built_pos)
         sentinel_spot = None
-        if self.last_bridge_built_pos is not None and not self.sentinel_placed:
+        if ore_bool and self.last_bridge_built_pos is not None and not self.sentinel_placed:
             closest = min(
                 [p for p in candidates if self._in_bounds(p) and self.last_bridge_built_pos != p and c.is_in_vision(p) and (c.is_tile_passable(p) or c.is_tile_empty(p))],
                 key=lambda p: p.distance_squared(self.last_bridge_built_pos),
@@ -829,7 +833,7 @@ class Harvester:
                 continue
 
             building_id = c.get_tile_building_id(objetivo)
-            edificio_deseado = EntityType.SENTINEL if objetivo == sentinel_spot else EntityType.BARRIER
+            edificio_deseado = EntityType.SENTINEL if ore_bool and objetivo == sentinel_spot else EntityType.BARRIER
 
             if building_id is not None:
                 entity = c.get_entity_type(building_id)
@@ -839,7 +843,7 @@ class Harvester:
                 if entity == edificio_deseado and team == c.get_team():
                     continue
 
-                if entity in (EntityType.BRIDGE, EntityType.SENTINEL) and team == c.get_team():
+                if entity in (EntityType.BRIDGE, EntityType.SENTINEL, EntityType.HARVESTER, EntityType.LAUNCHER, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR) and team == c.get_team():
                     continue
 
                 # Estructura enemiga: intentar destruirla
@@ -1112,6 +1116,7 @@ class Harvester:
         """
         # ── 1. Buscar puentes aliados cercanos conectados a la base ──────────────
         chain_candidates = []
+        best = None
 
         for b in builds:
             if c.get_team(b) != c.get_team():
@@ -1131,7 +1136,7 @@ class Harvester:
         # ── 2. Si hay candidatos de cadena, usar el más cercano a place ──────────
         if chain_candidates:
             chain_candidates.sort(key=lambda p: place.distance_squared(p))
-            return chain_candidates[0]
+            best = chain_candidates[0]
 
         # ── 3. Comportamiento original: apuntar a end_bridges ────────────────────
         candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
@@ -1139,9 +1144,10 @@ class Harvester:
             if end == self.last_bridge_end:
                 continue
             if self._in_bounds(end):
-                return end
+                if best is None or end in self.end_bridges:
+                    best = end
 
-        return None
+        return best
 
     def _find_bridge_step(self, place: Position, target: Position, c: Controller, builds: list) -> Position | None:
         """Solo se ejecuta si el puente directo no alcanza. Bucle 7x7 + puentes aliados visibles."""
