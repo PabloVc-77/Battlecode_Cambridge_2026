@@ -2,7 +2,7 @@ from operator import pos
 
 from cambc import Controller, Direction, EntityType, Environment, Position
 import math
-import bignav_opus as bugnav
+import bignav_a_mem as bugnav
 
 def _is_in_bounds(c: Controller, pos: Position) -> bool:
     # Kept for backward compatibility; use self._in_bounds() inside the class.
