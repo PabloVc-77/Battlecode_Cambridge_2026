@@ -2,7 +2,7 @@ from operator import pos
 
 from cambc import Controller, Direction, EntityType, Environment, Position
 import math
-import bignav_opus as bugnav
+import bugnav_a as bugnav
 
 #get_tile_env(pos: Position) == None
 

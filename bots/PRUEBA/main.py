@@ -17,10 +17,9 @@ from botRolex.core import run_core
 
 # BUILDER BOTS
 from botRolex.builder import Harvester
-from botRolex.builderTorretas2 import Torreta
 from botRolex.defensivo import Defensivo
-from botRolex.builderAtaque import BuilderAtaque
-from botRolex.builderMuros3 import Muros
+from botRolex.bastion import Bastion
+
 
 # TORRETAS
 from torretaRolex.sentinel import run_sentinel
@@ -44,19 +43,13 @@ class Player:
         elif etype == EntityType.BUILDER_BOT:
             if(self.brain is None): # primera ronda de su vida
                 round = ct.get_current_round()
-                if round > 50:
-                    if ct.get_id() % 5 == 0 or ct.get_id() % 5 == 1:
-                        self.brain = Torreta(ct) # torreta
-                    elif ct.get_id() % 5 == 2 or ct.get_id() % 5 == 3: #2 de cada 5
-                        self.brain = Muros(ct)
-                    else:
-                        self.brain = Harvester(ct)
-                elif round == 1:
+                if round == 1:
                     self.brain = Defensivo(ct) # defensivo
-                elif round == 2 or round == 4:
-                    self.brain = Muros(ct) # defensor / ataque luego (de momento Harvester)
+                elif round == 2:
+                    self.brain = Bastion(ct)
                 else:
                     self.brain = Harvester(ct) # normal
+                    
             self.brain.run(ct)
 
         elif etype == EntityType.SENTINEL:

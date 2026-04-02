@@ -51,6 +51,9 @@ class Torreta:
             self.enemy_core.append(Position(x, h - y))
             self.enemy_core.append(Position(w - x, h - y))
 
+        if c.can_heal(c.get_position()):
+            c.heal(c.get_position())
+
         if self.enemy_core_pos is None:
             self.find_enemy_core(c)
         else:
