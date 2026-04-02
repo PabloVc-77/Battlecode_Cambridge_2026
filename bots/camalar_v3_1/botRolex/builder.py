@@ -37,8 +37,6 @@ def _is_conv_better(c: Controller, ini: Position, end: Position):
     bridge_cost = c.get_bridge_cost()[0]
     conveyor_cost = c.get_conveyor_cost()[0]
 
-    # Cola BFS: (posición_actual, camino_hasta_aquí)
-    # camino es lista de (pos, dir) — la dir que tomamos AL LLEGAR a pos
     from collections import deque
     queue = deque()
     queue.append((ini, []))
@@ -49,7 +47,7 @@ def _is_conv_better(c: Controller, ini: Position, end: Position):
 
         i = len(path)
         coste_acumulado = (i + 0.01 * i) * conveyor_cost
-        if coste_acumulado >= c.get_bridge_cost()[0]:
+        if coste_acumulado >= bridge_cost:
             return None  # ya es más caro que el puente, cortar
 
         if current == end:
@@ -78,6 +76,7 @@ def _is_conv_better(c: Controller, ini: Position, end: Position):
             queue.append((neighbor, path + [(current, d)]))
 
     return None  # no hay camino dentro del presupuesto
+
 
 class Harvester:
     def __init__(self, c: Controller):
@@ -143,12 +142,20 @@ class Harvester:
                 break
 
         s = self.spawn
-        viable_end_of_bridges = [s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.EAST), s.add(Direction.NORTH).add(Direction.NORTH), s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.WEST),
-                                s.add(Direction.EAST).add(Direction.EAST).add(Direction.NORTH), s.add(Direction.EAST).add(Direction.EAST), s.add(Direction.EAST).add(Direction.EAST).add(Direction.SOUTH),
-                                s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.EAST), s.add(Direction.SOUTH).add(Direction.SOUTH), s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.WEST),
-                                s.add(Direction.WEST).add(Direction.WEST).add(Direction.NORTH), s.add(Direction.WEST).add(Direction.WEST), s.add(Direction.WEST).add(Direction.WEST).add(Direction.SOUTH)]
-                                #s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.EAST).add(Direction.EAST), s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.WEST).add(Direction.WEST),
-                                #s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.EAST).add(Direction.EAST), s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.WEST).add(Direction.WEST)]
+        viable_end_of_bridges = [
+            s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.EAST),
+            s.add(Direction.NORTH).add(Direction.NORTH),
+            s.add(Direction.NORTH).add(Direction.NORTH).add(Direction.WEST),
+            s.add(Direction.EAST).add(Direction.EAST).add(Direction.NORTH),
+            s.add(Direction.EAST).add(Direction.EAST),
+            s.add(Direction.EAST).add(Direction.EAST).add(Direction.SOUTH),
+            s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.EAST),
+            s.add(Direction.SOUTH).add(Direction.SOUTH),
+            s.add(Direction.SOUTH).add(Direction.SOUTH).add(Direction.WEST),
+            s.add(Direction.WEST).add(Direction.WEST).add(Direction.NORTH),
+            s.add(Direction.WEST).add(Direction.WEST),
+            s.add(Direction.WEST).add(Direction.WEST).add(Direction.SOUTH),
+        ]
 
         for v in viable_end_of_bridges:
             if _is_in_bounds(c, v) and c.is_in_vision(v) and c.get_tile_env(v) != Environment.WALL:
@@ -223,7 +230,6 @@ class Harvester:
             # Solo actuamos si estamos en rango de acción (dist² <= 2)
             if current.distance_squared(pos) > 2:
                 continue
-
             if not c.is_in_vision(pos):
                 continue
 
@@ -265,10 +271,10 @@ class Harvester:
         # Restaurar barriers temporalmente destruidas para pasar
         self._restore_barriers(c)
         current = c.get_position()
-        
+
         if c.can_heal(current):
             c.heal(current)
-        
+
         if self.mode == 1:
             c.draw_indicator_dot(current, 24, 184, 69)
             self.place_bridge_ore(c)
@@ -322,7 +328,7 @@ class Harvester:
             if c.is_in_vision(target):
                 build_id = c.get_tile_building_id(target)
                 if (build_id is not None and c.get_entity_type(build_id) != EntityType.HARVESTER) and not self._clear_tile(c, target):
-                    return  # Aún no lo hemos roto
+                    return
 
             if c.can_build_harvester(target):
                 c.build_harvester(target)
@@ -346,7 +352,6 @@ class Harvester:
                 if current.add(siguiente_dir).distance_squared(target) != 0:
                     self._try_move(c, siguiente_dir)
             else:
-                # Estamos al lado del target pero no podemos construir harvester
                 b_id = c.get_tile_building_id(target)
                 if b_id is not None and c.get_entity_type(b_id) == EntityType.HARVESTER and not revisor_casillas_extractor(c, c.get_position(b_id)):
                     self.current_target = target
@@ -400,8 +405,17 @@ class Harvester:
             return
 
         if c.is_in_vision(place):
+            b_id = c.get_tile_building_id(place)
+            # Si ya hay infraestructura de transporte aliada donde queremos poner el puente,
+            # la cadena ya está cubierta — ir a modo 3 a verificarla en lugar de destruirla.
+            if (b_id is not None
+                    and c.get_team(b_id) == c.get_team()
+                    and c.get_entity_type(b_id) in (
+                        EntityType.BRIDGE, EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR)):
+                self.mode = 3
+                return
             if not self._clear_tile(c, place):
-                return  # Aún no lo hemos roto
+                return
 
         if place == current:
             dir = self.navegador.moveTo(c, self.spawn, False)
@@ -419,12 +433,8 @@ class Harvester:
             self._try_move(c, dir)
             return
 
-        # --- Selección del destino (barata, sin llamadas al motor) ---
         nearby_builds = c.get_nearby_buildings()
 
-        # Bug fix: si bridge_destination ya está fijado (volvemos del modo 8),
-        # usarlo directamente y saltar la búsqueda para que can_build_bridge
-        # valide el destino correcto desde el primer momento.
         if self.bridge_destination is not None:
             end = self.bridge_destination
         else:
@@ -432,23 +442,28 @@ class Harvester:
             if target_end is None:
                 self.mode = 0
                 return
-            
-            # Al final de place_bridge_ore, después de calcular end:
-            conv_path = _is_conv_better(c, place, target_end)
-            self.conveyor_path = conv_path
-            if conv_path is not None and len(conv_path) > 0:
-                conv_pos, conv_dir = conv_path[0]
-                if c.can_build_conveyor(conv_pos, conv_dir):
-                    c.build_conveyor(conv_pos, conv_dir)
-                    self.conveyor_path.pop()
-                    self.last_bridge_end = conv_pos.add(conv_dir)
-                self.mode = 4  # la siguiente búsqueda decide el resto  
-                return
 
+            # Solo intentar conveyors si el puente directo no es posible,
+            # para no interferir con infraestructura existente.
+            if not c.can_build_bridge(place, target_end):
+                conv_path = _is_conv_better(c, place, target_end)
+                self.conveyor_path = conv_path if conv_path else []
+                if self.conveyor_path:
+                    conv_pos, conv_dir = self.conveyor_path[0]
+                    if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+                        c.build_armoured_conveyor(conv_pos, conv_dir)
+                        self.conveyor_path.pop(0)
+                        self.last_bridge_end = conv_pos.add(conv_dir)
+                    elif c.can_build_conveyor(conv_pos, conv_dir):
+                        c.build_conveyor(conv_pos, conv_dir)
+                        self.conveyor_path.pop(0)
+                        self.last_bridge_end = conv_pos.add(conv_dir)
+                    self.mode_after_conv = 1
+                    self.mode = 4
+                    return
 
             c.draw_indicator_dot(target_end, 255, 255, 255)
 
-            # --- Solo si el puente directo no alcanza, buscar paso intermedio ---
             if c.can_build_bridge(place, target_end):
                 end = target_end
             else:
@@ -459,22 +474,20 @@ class Harvester:
 
         c.draw_indicator_dot(end, 255, 255, 255)
 
-        # Quitar barrier propia en place si la hay (la pusimos nosotros en un tick anterior)
         building_id_place = c.get_tile_building_id(place)
         if (building_id_place is not None
                 and c.get_entity_type(building_id_place) == EntityType.BARRIER
                 and c.get_team(building_id_place) == c.get_team()):
             if c.can_destroy(place):
                 c.destroy(place)
-            return  # Turno siguiente: casilla libre, construiremos el puente
-
+            return
 
         if c.can_build_bridge(place, end):
             c.build_bridge(place, end)
             self.last_bridge_end = end
             self.pending_launcher_bridges.append(place)
             self.last_bridge_built_pos = place
-            self.bridge_destination = None  # limpiar tras construir
+            self.bridge_destination = None
             self.bridge_origin = None
 
             if end in self.end_bridges:
@@ -498,7 +511,6 @@ class Harvester:
             self.last_bridge_end = None
             return
 
-        # Moverse hasta anchor
         if current != bridge_end and current.distance_squared(bridge_end) > 2:
             dir = self.navegador.moveTo(c, bridge_end, four_dirs=False)
             next_pos = current.add(dir)
@@ -507,8 +519,6 @@ class Harvester:
             self._try_move(c, dir)
             return
 
-        # En anchor — colocar siguiente puente
-        # --- Selección del destino (barata, sin llamadas al motor) ---
         nearby_builds = c.get_nearby_buildings()
 
         # Bug fix: si bridge_destination ya está fijado (volvemos del modo 8),
@@ -529,7 +539,6 @@ class Harvester:
 
             c.draw_indicator_dot(target_end, 255, 255, 0)
 
-            # --- Solo si el puente directo no alcanza, buscar paso intermedio ---
             if c.can_build_bridge(bridge_end, target_end):
                 end = target_end
             else:
@@ -544,31 +553,35 @@ class Harvester:
 
         if c.is_in_vision(bridge_end):
             if not self._clear_tile(c, bridge_end):
-                return  # Aún no lo hemos roto
+                return
 
-        # Quitar barrier propia en bridge_end si la hay
         building_id_be = c.get_tile_building_id(bridge_end)
         if (building_id_be is not None
                 and c.get_entity_type(building_id_be) == EntityType.BARRIER
                 and c.get_team(building_id_be) == c.get_team()):
             if c.can_destroy(bridge_end):
                 c.destroy(bridge_end)
-            return  # Turno siguiente construiremos el puente
-
-
-        # ¿Conveyors más baratas para este tramo (bridge_end → end)?
-        conv_path = _is_conv_better(c, bridge_end, end)
-        self.conveyor_path = conv_path
-        if conv_path is not None and len(conv_path) > 0:
-            conv_pos, conv_dir = conv_path[0]
-            if c.can_build_conveyor(conv_pos, conv_dir):
-                c.build_conveyor(conv_pos, conv_dir)
-                self.conveyor_path.pop()
-                self.last_bridge_end = conv_pos.add(conv_dir)
-            # No actualizamos last_bridge_end — la siguiente búsqueda decide el resto
-            self.mode = 4
             return
 
+        # ¿Conveyors más baratas para este tramo (bridge_end → end)?
+        # Solo evaluar si el puente directo no es posible, para no destruir
+        # infraestructura existente cuando can_build_bridge ya lo resolvería.
+        if not c.can_build_bridge(bridge_end, end):
+            conv_path = _is_conv_better(c, bridge_end, end)
+            self.conveyor_path = conv_path if conv_path else []
+            if self.conveyor_path:
+                conv_pos, conv_dir = self.conveyor_path[0]
+                if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+                    c.build_armoured_conveyor(conv_pos, conv_dir)
+                    self.conveyor_path.pop(0)
+                    self.last_bridge_end = conv_pos.add(conv_dir)
+                elif c.can_build_conveyor(conv_pos, conv_dir):
+                    c.build_conveyor(conv_pos, conv_dir)
+                    self.conveyor_path.pop(0)
+                    self.last_bridge_end = conv_pos.add(conv_dir)
+                self.mode_after_conv = 2
+                self.mode = 4
+                return
 
         if c.can_build_bridge(bridge_end, end):
             c.build_bridge(bridge_end, end)
@@ -651,7 +664,6 @@ class Harvester:
             self.mode = 0
             return
 
-        # ¿Ya llegamos a spawn?
         if self.check_pos in self.end_bridges:
             self.mode = 0
             self.check_pos = None
@@ -660,20 +672,18 @@ class Harvester:
 
         c.draw_indicator_dot(self.check_pos, 255, 128, 0)
 
-        # Si no tenemos visión, movernos hacia check_pos
         if not c.is_in_vision(self.check_pos):
             dir = self.navegador.moveTo(c, self.check_pos, four_dirs=False)
             next_pos = current.add(dir)
             if c.can_build_road(next_pos):
                 c.build_road(next_pos)
-            if c.can_move(dir):
-                c.move(dir)
+            self._try_move(c, dir)
             return
 
-        # Tenemos visión — comprobar qué hay en check_pos
         building_id = c.get_tile_building_id(self.check_pos)
 
-        if building_id is None or c.get_entity_type(building_id) not in (EntityType.BRIDGE, EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR):
+        if building_id is None or c.get_entity_type(building_id) not in (
+                EntityType.BRIDGE, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
             # Hueco — reconstruir desde aquí
             self.last_bridge_end = self.check_pos
             self.check_pos = None
@@ -688,15 +698,23 @@ class Harvester:
             return
 
         # Puente nuestro y válido — avanzar al siguiente eslabón
-        if c.get_entity_type(building_id) == EntityType.BRIDGE:
+        entity_type = c.get_entity_type(building_id)
+        if entity_type == EntityType.BRIDGE:
             next_check = c.get_bridge_target(building_id)
         else:
+            # CONVEYOR / ARMOURED_CONVEYOR: la salida es check_pos + dirección
             next_check = self.check_pos.add(c.get_direction(building_id))
 
         if next_check is None:
             self.last_bridge_end = self.check_pos
             self.check_pos = None
             self.mode = 2
+            return
+
+        if next_check in self.end_bridges:
+            self.mode = 0
+            self.check_pos = None
+            self.last_bridge_end = None
             return
 
         # Todo bien en este eslabón, avanzar
@@ -741,12 +759,12 @@ class Harvester:
                         and c.get_direction(build_id) == conv_dir):
                     self.conveyor_path.pop(0)
                     end = conv_pos.add(conv_dir)
-                    self._check_conveyor_chain_end(end)
+                    self._check_conveyor_chain_end(c, end)
                     return
 
-                # PARCHE 2: NUNCA destruir infraestructura de transporte aliada
-                # (bridge/conveyor/splitter) que ya existe en la ruta — puede ser
-                # parte de la cadena activa. Simplemente saltamos este paso.
+                # Si hay infraestructura de transporte aliada en la ruta (bridge/
+                # conveyor/splitter), no destruirla — puede ser parte de la cadena
+                # activa. Simplemente saltamos este paso y avanzamos last_bridge_end.
                 if (team == c.get_team() and entity in (
                         EntityType.BRIDGE, EntityType.CONVEYOR,
                         EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER)):
@@ -758,33 +776,56 @@ class Harvester:
                         end = conv_pos.add(c.get_direction(build_id))
                     if end is not None:
                         self.last_bridge_end = end
-                        self._check_conveyor_chain_end(end)
+                        self._check_conveyor_chain_end(c, end)
                     return
 
                 # Cualquier otro edificio: intentar limpiar
                 if not self._clear_tile(c, conv_pos):
                     return
 
-        # ── Construir el conveyor ────────────────────────────────────────────────
-        if c.can_build_conveyor(conv_pos, conv_dir):
+        # ── Construir el conveyor (preferir armoured si hay recursos) ────────────
+        built = False
+        if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+            c.build_armoured_conveyor(conv_pos, conv_dir)
+            built = True
+        elif c.can_build_conveyor(conv_pos, conv_dir):
             c.build_conveyor(conv_pos, conv_dir)
+            built = True
+
+        if built:
             self.conveyor_path.pop(0)
             end = conv_pos.add(conv_dir)
             self.last_bridge_end = end
-            self._check_conveyor_chain_end(end)
- 
-    def _check_conveyor_chain_end(self, end: Position):
+            self._check_conveyor_chain_end(c, end)
+
+    def _check_conveyor_chain_end(self, c: Controller, end: Position):
         """
         Tras colocar (o saltar) un conveyor, comprueba si `end` ya es un nodo
         base o si la cadena está terminada, y actualiza el modo.
+        Replica la misma lógica de transición que bridgeHome tras construir un puente:
+          - end en end_bridges         → modo 0 (cadena completa)
+          - cadena vacía + end conecta con bridge/conveyor aliado → modo 3 (revisar)
+          - cadena vacía + end libre   → mode_after_conv, normalmente modo 2 (seguir)
         """
         if end in self.end_bridges:
             self.conveyor_path = []
             self.mode = 0
             self.last_bridge_end = None
             return
- 
+
         if not self.conveyor_path:
+            # Misma lógica que bridgeHome: si end ya tiene infraestructura aliada
+            # conectada, ir a modo 3 para verificar la cadena existente.
+            if c.is_in_vision(end):
+                end_bid = c.get_tile_building_id(end)
+                if (end_bid is not None
+                        and c.get_team(end_bid) == c.get_team()
+                        and c.get_entity_type(end_bid) in (
+                            EntityType.BRIDGE,
+                            EntityType.CONVEYOR,
+                            EntityType.ARMOURED_CONVEYOR)):
+                    self.mode = 3
+                    return
             self.mode = self.mode_after_conv
 
     # MODE 6
@@ -812,6 +853,7 @@ class Harvester:
                     continue
                 if self.last_bridge_end is not None and self.last_bridge_end == spot:
                     continue
+                building_id = c.get_tile_building_id(spot)
                 building_id = c.get_tile_building_id(spot)
                 if building_id is not None:
                     # Si ya hay un launcher aliado, no hace falta construir
@@ -886,7 +928,6 @@ class Harvester:
             ore = c.get_tile_env(harvester_pos)
         ore_bool = ore is not None and ore != Environment.ORE_AXIONITE
 
-        # Determinar cuál casilla es la del puente (la más cercana a last_bridge_built_pos)
         sentinel_spot = None
         if ore_bool and self.last_bridge_built_pos is not None and not self.sentinel_placed:
             closest = min(
@@ -900,7 +941,6 @@ class Harvester:
             if not self._in_bounds(objetivo):
                 continue
 
-            # Acercarnos si no está en visión
             if not c.is_in_vision(objetivo):
                 dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
                 self._try_move(c, dir)
@@ -909,7 +949,6 @@ class Harvester:
             if c.get_tile_env(objetivo) == Environment.WALL:
                 continue
 
-
             building_id = c.get_tile_building_id(objetivo)
             edificio_deseado = EntityType.SENTINEL if ore_bool and objetivo == sentinel_spot else EntityType.BARRIER
 
@@ -917,29 +956,24 @@ class Harvester:
                 entity = c.get_entity_type(building_id)
                 team = c.get_team(building_id)
 
-                # Ya tiene lo que queremos: casilla resuelta
                 if entity == edificio_deseado and team == c.get_team():
                     continue
 
                 if entity in (EntityType.BRIDGE, EntityType.SENTINEL, EntityType.HARVESTER, EntityType.LAUNCHER, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR) and team == c.get_team():
                     continue
 
-                # Estructura enemiga: intentar destruirla
                 if not self._clear_tile(c, objetivo):
                     return
 
-            # Casilla vacía o recién liberada: construir lo que toca
             resultado = self.construir(c, objetivo, edificio_deseado)
             if not resultado:
                 return
 
-        # Todas las casillas resueltas
         self.sentinel_placed = False
         self.mode = 6
 
-
-
     # UTILITY
+
     def construir(self, c: Controller, objetivo: Position, edificio: EntityType) -> bool:
         """
         Intenta construir 'edificio' en 'objetivo'.
@@ -970,14 +1004,14 @@ class Harvester:
             if entity == EntityType.ROAD and team == c.get_team():
                 if current.distance_squared(objetivo) > 2:
                     if not self.navegador.is_reachable(c, objetivo):
-                        return True # skip permanente: inalcanzable
-                    c.draw_indicator_line(current, objetivo, 0, 100, 0)  # verde oscuro
+                        return True
+                    c.draw_indicator_line(current, objetivo, 0, 100, 0)
                     dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
                     next_pos = current.add(dir)
                     if c.can_build_road(next_pos):
                         c.build_road(next_pos)
                     self._try_move(c, dir)
-                    return False  # Nos acercamos primero
+                    return False
 
                 if c.can_destroy(objetivo):
                     c.destroy(objetivo)
@@ -987,13 +1021,13 @@ class Harvester:
             if entity == EntityType.ROAD and team != c.get_team():
                 if current != objetivo:
                     if c.is_tile_passable(objetivo):
-                        c.draw_indicator_line(current, objetivo, 0, 100, 0)  # verde oscuro
+                        c.draw_indicator_line(current, objetivo, 0, 100, 0)
                         dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
                         next_pos = current.add(dir)
                         if c.can_build_road(next_pos):
                             c.build_road(next_pos)
                         self._try_move(c, dir)
-                    return False  # Aún no estamos encima
+                    return False
 
                 # Estamos encima: atacar
                 if c.can_fire(objetivo):
@@ -1014,7 +1048,7 @@ class Harvester:
 
         # ── 4. Casilla vacía: acercarse y construir ──────────────────────────────
         if current.distance_squared(objetivo) > 2:
-            c.draw_indicator_line(current, objetivo, 0, 100, 0)  # verde oscuro
+            c.draw_indicator_line(current, objetivo, 0, 100, 0)
             dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
             next_pos = current.add(dir)
             if c.can_build_road(next_pos):
@@ -1029,7 +1063,6 @@ class Harvester:
                 c.build_road(next_pos)
             self._try_move(c, dir)
 
-        # En rango: construir según el tipo de edificio
         if edificio == EntityType.BARRIER and c.can_build_barrier(objetivo):
             c.build_barrier(objetivo)
             return True
@@ -1218,8 +1251,8 @@ class Harvester:
                     if c.get_team(building_id) != c.get_team() and not c.is_tile_passable(candidate):
                         continue
                     if entity_type not in (EntityType.ROAD, EntityType.CONVEYOR,
-                                        EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER,
-                                        EntityType.FOUNDRY):
+                                           EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER,
+                                           EntityType.FOUNDRY):
                         continue
 
                 remaining_sq = candidate.distance_squared(target)
