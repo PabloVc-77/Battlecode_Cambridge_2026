@@ -47,7 +47,7 @@ class Player:
                 if round == 1:
                     self.brain = Defensivo(ct) # defensivo
                 elif round == 2:
-                    self.brain = Harvester(ct)
+                    self.brain = Bastion(ct)
                 else:
                     self.brain = Harvester(ct) # normal
                     

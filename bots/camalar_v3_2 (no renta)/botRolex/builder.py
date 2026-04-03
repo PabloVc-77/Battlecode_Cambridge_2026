@@ -1289,7 +1289,7 @@ class Harvester:
             best = chain_candidates[0]
 
         # ── 3. Comportamiento original: apuntar a end_bridges ────────────────────
-        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
+        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p), reverse=True)
         for end in candidates:
             if end == self.last_bridge_end:
                 continue
@@ -1324,6 +1324,9 @@ class Harvester:
 
                 # No usar casillas del anillo de barriers como destino intermedio de puente
                 if candidate in self.barrier_ring:
+                    continue
+
+                if candidate in self.layout_positions and candidate not in self.end_bridges:
                     continue
 
                 env = c.get_tile_env(candidate)

@@ -316,6 +316,7 @@ class Harvester:
             self.colocar_defensas(c, self.current_target)
             return
 
+        # MODE 0
         c.draw_indicator_dot(current, 255, 255, 255)
 
         self.oreCerca(c)
@@ -392,6 +393,8 @@ class Harvester:
                 c.build_road(move_pos)
             self._try_move(c, move_dir)
 
+    # MODE 1
+
     def place_bridge_ore(self, c: Controller):
         places = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
         viable_places = []
@@ -425,6 +428,15 @@ class Harvester:
             return
 
         if c.is_in_vision(place):
+            b_id = c.get_tile_building_id(place)
+            # Si ya hay infraestructura de transporte aliada donde queremos poner el puente,
+            # la cadena ya está cubierta — ir a modo 3 a verificarla en lugar de destruirla.
+            if (b_id is not None
+                    and c.get_team(b_id) == c.get_team()
+                    and c.get_entity_type(b_id) in (
+                        EntityType.BRIDGE, EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR)):
+                self.mode = 3
+                return
             if not self._clear_tile(c, place):
                 return  # Aún no lo hemos roto
 
@@ -463,13 +475,14 @@ class Harvester:
             self.conveyor_path = conv_path
             if conv_path is not None and len(conv_path) > 0:
                 conv_pos, conv_dir = conv_path[0]
-                if c.can_build_conveyor(conv_pos, conv_dir):
+                if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+                    c.build_armoured_conveyor(conv_pos, conv_dir)
+                elif c.can_build_conveyor(conv_pos, conv_dir):
                     c.build_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop()
                     self.last_bridge_end = conv_pos.add(conv_dir)
                 self.mode = 4  # la siguiente búsqueda decide el resto  
                 return
-
 
             c.draw_indicator_dot(target_end, 255, 255, 255)
 
@@ -513,12 +526,13 @@ class Harvester:
             elif (c.is_in_vision(end)
                   and c.get_tile_building_id(end) is not None
                   and c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE):
-                
                 self.mode_after_launcher = 3
             else:
                 self.mode_after_launcher = 2
 
             self.mode = 7
+
+    # MODE 2
 
     def bridgeHome(self, c: Controller):
         current = c.get_position()
@@ -609,7 +623,6 @@ class Harvester:
             # No actualizamos last_bridge_end — la siguiente búsqueda decide el resto
             self.mode = 4
             return
-
 
         if c.can_build_bridge(bridge_end, end):
             c.build_bridge(bridge_end, end)
@@ -716,8 +729,7 @@ class Harvester:
             next_pos = current.add(dir)
             if c.can_build_road(next_pos):
                 c.build_road(next_pos)
-            if c.can_move(dir):
-                c.move(dir)
+            self._try_move(c, dir)
             return
 
         # Tenemos visión — comprobar qué hay en check_pos
@@ -747,6 +759,12 @@ class Harvester:
             self.last_bridge_end = self.check_pos
             self.check_pos = None
             self.mode = 2
+            return
+
+        if next_check in self.end_bridges:
+            self.mode = 0
+            self.check_pos = None
+            self.last_bridge_end = None
             return
 
         # Todo bien en este eslabón, avanzar
@@ -791,12 +809,12 @@ class Harvester:
                         and c.get_direction(build_id) == conv_dir):
                     self.conveyor_path.pop(0)
                     end = conv_pos.add(conv_dir)
-                    self._check_conveyor_chain_end(end)
+                    self._check_conveyor_chain_end(c, end)
                     return
 
-                # PARCHE 2: NUNCA destruir infraestructura de transporte aliada
-                # (bridge/conveyor/splitter) que ya existe en la ruta — puede ser
-                # parte de la cadena activa. Simplemente saltamos este paso.
+                # Si hay infraestructura de transporte aliada en la ruta (bridge/
+                # conveyor/splitter), no destruirla — puede ser parte de la cadena
+                # activa. Simplemente saltamos este paso y avanzamos last_bridge_end.
                 if (team == c.get_team() and entity in (
                         EntityType.BRIDGE, EntityType.CONVEYOR,
                         EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER)):
@@ -808,35 +826,59 @@ class Harvester:
                         end = conv_pos.add(c.get_direction(build_id))
                     if end is not None:
                         self.last_bridge_end = end
-                        self._check_conveyor_chain_end(end)
+                        self._check_conveyor_chain_end(c, end)
                     return
 
                 # Cualquier otro edificio: intentar limpiar
                 if not self._clear_tile(c, conv_pos):
                     return
 
-        # ── Construir el conveyor ────────────────────────────────────────────────
-        if c.can_build_conveyor(conv_pos, conv_dir):
+        # ── Construir el conveyor (preferir armoured si hay recursos) ────────────
+        built = False
+        if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+            c.build_armoured_conveyor(conv_pos, conv_dir)
+            built = True
+        elif c.can_build_conveyor(conv_pos, conv_dir):
             c.build_conveyor(conv_pos, conv_dir)
+            built = True
+
+        if built:
             self.conveyor_path.pop(0)
             end = conv_pos.add(conv_dir)
             self.last_bridge_end = end
-            self._check_conveyor_chain_end(end)
- 
-    def _check_conveyor_chain_end(self, end: Position):
+            self._check_conveyor_chain_end(c, end)
+
+    def _check_conveyor_chain_end(self, c: Controller, end: Position):
         """
         Tras colocar (o saltar) un conveyor, comprueba si `end` ya es un nodo
         base o si la cadena está terminada, y actualiza el modo.
+        Replica la misma lógica de transición que bridgeHome tras construir un puente:
+          - end en end_bridges         → modo 0 (cadena completa)
+          - cadena vacía + end conecta con bridge/conveyor aliado → modo 3 (revisar)
+          - cadena vacía + end libre   → mode_after_conv, normalmente modo 2 (seguir)
         """
         if end in self.end_bridges:
             self.conveyor_path = []
             self.mode = 0
             self.last_bridge_end = None
             return
- 
+
         if not self.conveyor_path:
+            # Misma lógica que bridgeHome: si end ya tiene infraestructura aliada
+            # conectada, ir a modo 3 para verificar la cadena existente.
+            if c.is_in_vision(end):
+                end_bid = c.get_tile_building_id(end)
+                if (end_bid is not None
+                        and c.get_team(end_bid) == c.get_team()
+                        and c.get_entity_type(end_bid) in (
+                            EntityType.BRIDGE,
+                            EntityType.CONVEYOR,
+                            EntityType.ARMOURED_CONVEYOR)):
+                    self.mode = 3
+                    return
             self.mode = self.mode_after_conv
 
+    # no hay mode 5
     # MODE 6
 
     def _get_launcher_spot(self, c: Controller, bridge_pos: Position) -> Position | None:
@@ -971,7 +1013,6 @@ class Harvester:
             #si hay mas minerales no construir defensas
             if c.get_tile_env(objetivo) in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
                 continue
-
 
             building_id = c.get_tile_building_id(objetivo)
             edificio_deseado = EntityType.SENTINEL if ore_bool and objetivo == sentinel_spot else EntityType.BARRIER
@@ -1241,7 +1282,7 @@ class Harvester:
             best = chain_candidates[0]
 
         # ── 3. Comportamiento original: apuntar a end_bridges ────────────────────
-        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
+        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p), reverse=True)
         for end in candidates:
             if end == self.last_bridge_end:
                 continue
