@@ -94,7 +94,7 @@ class Bastion:
         """True si la posición ya tiene barrier aliada o muro de mapa."""
         if not c.is_in_vision(pos):
             return False
-        if c.get_tile_env(pos) == Environment.WALL:
+        if c.get_tile_env(pos) in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
             return True
         bid = c.get_tile_building_id(pos)
         if bid is not None:
@@ -252,7 +252,7 @@ class Bastion:
             self._navigate_to(c, target)
             return False
 
-        if c.get_tile_env(target) == Environment.WALL:
+        if c.get_tile_env(target) in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
             return True
         
         valid = [EntityType.BARRIER, EntityType.BREACH, EntityType.SENTINEL, EntityType.GUNNER]
