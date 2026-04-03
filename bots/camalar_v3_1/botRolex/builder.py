@@ -728,7 +728,7 @@ class Harvester:
         Al terminar, vuelve a self.mode_after_conv.
         """
         if not self.conveyor_path:
-            self.mode = self.mode_after_conv
+            self._check_conveyor_chain_end(c, self.last_bridge_end) 
             return
 
         current = c.get_position()
