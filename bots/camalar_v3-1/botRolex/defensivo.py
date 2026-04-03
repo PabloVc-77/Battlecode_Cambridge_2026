@@ -158,7 +158,9 @@ class Defensivo:
                     if _is_in_bounds(c, pos) and c.is_in_vision(pos):
                         something = c.get_tile_building_id(pos)
                         if c.is_tile_empty(pos) or (c.get_entity_type(something) not in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR) and c.is_tile_passable(pos)):
-                            casillas_validas.append(pos)
+                            if self.furnace_pos is None or pos != self.furnace_pos:
+                                if self.splitter_pos is None or pos != self.splitter_pos:
+                                    casillas_validas.append(pos)
                         elif self.furnace_pos is not None and c.is_in_vision(self.furnace_pos) and c.get_entity_type(furnace) == EntityType.FOUNDRY and c.get_entity_type(something) in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
                             dir_conv = c.get_direction(something)
                             if not _is_diagonal(dir_conv) and dir_conv != pos.direction_to(self.furnace_pos):

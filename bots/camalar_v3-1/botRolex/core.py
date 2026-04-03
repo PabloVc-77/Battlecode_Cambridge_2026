@@ -13,11 +13,11 @@ def run_core(self, c: Controller):
     #c.draw_indicator_dot(pos, 39, 224, 245)
     width = c.get_map_width()
     if width > 20:
-        if self.num_spawned < 4:
+        if self.num_spawned < 3:
             spawnBuilder(c)
             self.num_spawned += 1
     else:
-        if self.num_spawned < 5:
+        if self.num_spawned < 4:
             spawnBuilder(c)
             self.num_spawned += 1
 

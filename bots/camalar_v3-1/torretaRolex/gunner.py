@@ -3,7 +3,7 @@ import math
 
 TORRETAS = [EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER]
 
-def run_sentinel(self, c: Controller):
+def run_gunner(self, c: Controller):
     entities = c.get_nearby_entities()
 
     targets = []
@@ -65,12 +65,10 @@ def get_priority(e, c):
         return 3
     if t == EntityType.BUILDER_BOT:
         return 4
-    if t == EntityType.BARRIER:
-        return 5
     if t == EntityType.BRIDGE:
-        return 6
+        return 5
     if t == EntityType.ARMOURED_CONVEYOR:
-        return 7
+        return 6
     if t in [EntityType.ROAD, EntityType.CONVEYOR, EntityType.SPLITTER]:
-        return 8
-    return 9
+        return 7
+    return 8
