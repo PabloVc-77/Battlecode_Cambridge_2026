@@ -824,16 +824,21 @@ class Harvester:
                 if (team == c.get_team() and entity in (
                         EntityType.BRIDGE, EntityType.CONVEYOR,
                         EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER)):
-                    self.conveyor_path.pop(0)
-                    # Avanzar last_bridge_end al destino de este eslabón existente
-                    if entity == EntityType.BRIDGE:
-                        end = c.get_bridge_target(build_id)
-                    else:
-                        end = conv_pos.add(c.get_direction(build_id))
-                    if end is not None:
-                        self.last_bridge_end = end
-                        self._check_conveyor_chain_end(c, end)
-                    return
+                    
+                    if (entity in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR)
+                        and team == c.get_team()
+                        and c.get_direction(build_id) == conv_dir) or entity not in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+
+                        self.conveyor_path.pop(0)
+                        # Avanzar last_bridge_end al destino de este eslabón existente
+                        if entity == EntityType.BRIDGE:
+                            end = c.get_bridge_target(build_id)
+                        else:
+                            end = conv_pos.add(c.get_direction(build_id))
+                        if end is not None:
+                            self.last_bridge_end = end
+                            self._check_conveyor_chain_end(c, end)
+                        return
 
                 # Cualquier otro edificio: intentar limpiar
                 if not self._clear_tile(c, conv_pos):
@@ -1255,46 +1260,44 @@ class Harvester:
 
     def _find_best_bridge_end(self, place: Position, c: Controller, builds: list) -> Position | None:
         """
-        Primero intenta conectar a un puente aliado cercano que ya esté conectado
-        a la base. Si no encuentra ninguno, usa el comportamiento original
-        (apuntar directamente a end_bridges).
-        Recibe `builds` (resultado de get_nearby_buildings) para no repetir la llamada.
+        Apunta directamente a end_bridges, priorizando entradas menos usadas.
+        La penalización por uso es proporcional: equivale a multiplicar la distancia
+        por un factor, de modo que si una entrada libre está demasiado lejos,
+        sigue siendo mejor usar una ocupada más cercana.
         """
-        # ── 1. Buscar puentes aliados cercanos conectados a la base ──────────────
-        chain_candidates = []
+        PENALTY_FACTOR = 2.5  # una entrada usada "parece" estar 2.5x más lejos
+
         best = None
+        best_score = None  # distancia penalizada — menor = mejor
 
-        for b in builds:
-            if c.get_team(b) != c.get_team():
-                continue
-            if c.get_entity_type(b) != EntityType.BRIDGE:
-                continue
-
-            b_pos = c.get_position(b)
-            if place.distance_squared(b_pos) > 9:
-                continue  # Fuera del alcance directo de un puente
-            if b_pos == self.last_bridge_end:
-                continue  # Evitar conectar al puente que acabamos de poner
-            # No apuntar puentes al anillo de barriers
-            #if b_pos in self.barrier_ring:
-             #   continue
-
-            if self._is_connected_to_base(c, b):
-                chain_candidates.append(b_pos)
-
-        # ── 2. Si hay candidatos de cadena, usar el más cercano a place ──────────
-        if chain_candidates:
-            chain_candidates.sort(key=lambda p: place.distance_squared(p))
-            best = chain_candidates[0]
-
-        # ── 3. Comportamiento original: apuntar a end_bridges ────────────────────
-        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p), reverse=True)
-        for end in candidates:
+        for end in self.end_bridges:
             if end == self.last_bridge_end:
                 continue
-            if self._in_bounds(end):
-                if best is None or end in self.end_bridges:
-                    best = end
+            if not self._in_bounds(end):
+                continue
+
+            d = place.distance_squared(end)
+
+            # Contar cuántos elementos aliados apuntan ya a este end_bridge
+            usage_count = 0
+            for b in builds:
+                if c.get_team(b) != c.get_team():
+                    continue
+                entity = c.get_entity_type(b)
+                b_pos = c.get_position(b)
+                if entity == EntityType.BRIDGE:
+                    if c.get_bridge_target(b) == end:
+                        usage_count += 1
+                elif entity in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                    if b_pos.add(c.get_direction(b)) == end:
+                        usage_count += 1
+
+            # Penalización proporcional: cada uso adicional multiplica la distancia percibida
+            penalized_d = d * (PENALTY_FACTOR ** usage_count)
+            
+            if best_score is None or penalized_d < best_score:
+                best_score = penalized_d
+                best = end
 
         return best
 
@@ -1306,7 +1309,7 @@ class Harvester:
         ux, uy = dx / dist, dy / dist
 
         best: Position | None = None
-        best_score: tuple | None = None  # (-remaining_sq, dot) — mayor = mejor
+        best_score: tuple | None = None  # (penalización, -remaining_sq, dot) — mayor dot/menor dist = mejor
 
         for ddx in range(-3, 4):
             for ddy in range(-3, 4):
@@ -1321,16 +1324,13 @@ class Harvester:
                 if not self._in_bounds(candidate) or not c.is_in_vision(candidate):
                     continue
 
-                # No usar casillas del anillo de barriers como destino intermedio de puente
-                #if candidate in self.barrier_ring:
-                 #   continue
-
                 env = c.get_tile_env(candidate)
                 if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE, Environment.WALL):
                     continue
 
                 encerrado = True
-                for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST, Direction.NORTHEAST, Direction.SOUTHEAST, Direction.SOUTHWEST, Direction.NORTHWEST]:
+                for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST,
+                        Direction.NORTHEAST, Direction.SOUTHEAST, Direction.SOUTHWEST, Direction.NORTHWEST]:
                     adj = candidate.add(d)
                     if self._in_bounds(adj) and c.is_in_vision(adj):
                         if c.get_tile_env(adj) != Environment.WALL:
@@ -1350,15 +1350,20 @@ class Harvester:
                                         EntityType.FOUNDRY):
                         continue
 
+                # Penalizar si el candidato ya tiene infraestructura aliada apuntando a él
+                penalty = 0
+                if building_id is not None and c.get_team(building_id) == c.get_team():
+                    entity_type = c.get_entity_type(building_id)
+                    if entity_type in (EntityType.BRIDGE, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                        penalty = 1
+
                 remaining_sq = candidate.distance_squared(target)
-                score = (-remaining_sq, dot)
+                score = (-penalty, -remaining_sq, dot)  # penalización negativa: menor penalización = mejor
                 if best_score is None or score > best_score:
                     best_score = score
                     best = candidate
 
-        # Puentes aliados visibles: si la boca está a dist² ≤ 9 y su chain-end
-        # supera al mejor candidato directo, úsala como destino.
-        # `builds` se recibe como parámetro — ya fue obtenido por el llamador.
+        # Puentes aliados visibles como destino intermedio — también penalizados
         for b in builds:
             if c.get_team(b) != c.get_team():
                 continue
@@ -1367,22 +1372,20 @@ class Harvester:
 
             b_pos = c.get_position(b)
             if place.distance_squared(b_pos) > 9:
-                continue  # fuera de alcance directo, no sirve como end
+                continue
 
-            # No usar casillas del anillo como destino de puente
-            #if b_pos in self.barrier_ring:
-             #   continue
-
-            # Seguir la cadena hasta el endpoint final
             end_point = c.get_bridge_target(b)
             end_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
             while end_id is not None and c.get_entity_type(end_id) == EntityType.BRIDGE:
                 end_point = c.get_bridge_target(end_id)
                 end_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
 
+            # Penalizar si el endpoint ya está en uso
+            penalty = 1 if end_point in self.end_bridges else 0
+
             remaining_sq = end_point.distance_squared(target)
             dot = (b_pos.x - place.x) * ux + (b_pos.y - place.y) * uy
-            score = (-remaining_sq, dot)
+            score = (-penalty, -remaining_sq, dot)
             if best_score is None or score > best_score:
                 best_score = score
                 best = b_pos

@@ -315,6 +315,16 @@ class Defensivo:
         False si aún queda algo (o no podemos actuar todavía).
         En caso de que necesitemos acercarnos, hace el movimiento.
         """
+        if not c.is_in_vision(target):
+            # Nos acercamos para poder destruirlo (necesita dist² <= 2)
+            dir = self.navegador.moveTo(c, target, four_dirs=False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir):
+                c.move(dir)
+            return False
+        
         building_id = c.get_tile_building_id(target)
         if building_id is None:
             return True  # ya está libre
