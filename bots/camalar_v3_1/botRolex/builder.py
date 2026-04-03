@@ -300,6 +300,7 @@ class Harvester:
             self.colocar_defensas(c, self.current_target)
             return
 
+        # MODE 0
         c.draw_indicator_dot(current, 255, 255, 255)
 
         self.oreCerca(c)
@@ -374,6 +375,8 @@ class Harvester:
             if c.can_build_road(move_pos):
                 c.build_road(move_pos)
             self._try_move(c, move_dir)
+
+    # MODE 1
 
     def place_bridge_ore(self, c: Controller):
         places = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
@@ -501,6 +504,8 @@ class Harvester:
                 self.mode_after_launcher = 2
 
             self.mode = 7
+
+    # MODE 2
 
     def bridgeHome(self, c: Controller):
         current = c.get_position()
@@ -828,6 +833,7 @@ class Harvester:
                     return
             self.mode = self.mode_after_conv
 
+    # no hay mode 5
     # MODE 6
 
     def _get_launcher_spot(self, c: Controller, bridge_pos: Position) -> Position | None:
