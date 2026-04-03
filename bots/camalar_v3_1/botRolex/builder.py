@@ -72,8 +72,8 @@ def _is_conv_better(c: Controller, ini: Position, end: Position,
                 continue
 
             # Tratar el anillo de barriers como muro irrompible para conveyors
-            if barrier_ring is not None and neighbor in barrier_ring:
-                continue
+            #if barrier_ring is not None and neighbor in barrier_ring:
+                #continue
 
             env = c.get_tile_env(neighbor)
             if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE, Environment.WALL):
@@ -289,7 +289,7 @@ class Harvester:
         # Limpiar cache de conectividad de puentes al inicio de cada turno
         self._connected_cache = {}
         # Restaurar barriers temporalmente destruidas para pasar
-        self._restore_barriers(c)
+        #self._restore_barriers(c)
         current = c.get_position()
         
         if c.can_heal(current):
@@ -415,7 +415,7 @@ class Harvester:
                         extra_places_for_turrent.append(spot)
 
         # Excluir las casillas del anillo de barriers — no podemos poner un puente ahí
-        viable_places = [p for p in viable_places if p not in self.barrier_ring]
+        #viable_places = [p for p in viable_places if p not in self.barrier_ring]
 
         if len(viable_places) == 0:
             self.current_target = None
@@ -492,11 +492,12 @@ class Harvester:
 
             # --- Solo si el puente directo no alcanza, buscar paso intermedio ---
             # El destino del puente no puede caer dentro del anillo de barriers
-            if target_end not in self.barrier_ring and c.can_build_bridge(place, target_end):
+            #if target_end not in self.barrier_ring and c.can_build_bridge(place, target_end):
+            if c.can_build_bridge(place, target_end):
                 end = target_end
             else:
                 end = self._find_bridge_step(place, target_end, c, nearby_builds)
-                if end is None or end in self.barrier_ring:
+                if end is None: #or end in self.barrier_ring:
                     self.mode = 0
                     return
 
@@ -580,11 +581,12 @@ class Harvester:
 
             # --- Solo si el puente directo no alcanza, buscar paso intermedio ---
             # El destino del puente no puede caer dentro del anillo de barriers
-            if target_end not in self.barrier_ring and c.can_build_bridge(bridge_end, target_end):
+            #if target_end not in self.barrier_ring and c.can_build_bridge(bridge_end, target_end):
+            if c.can_build_bridge(bridge_end, target_end):
                 end = target_end
             else:
                 end = self._find_bridge_step(bridge_end, target_end, c, nearby_builds)
-                if end is None or end in self.barrier_ring:
+                if end is None:# or end in self.barrier_ring:
                     dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
                     next_pos = current.add(dir)
                     if c.can_build_road(next_pos):
@@ -904,8 +906,8 @@ class Harvester:
                 if spot in self.end_bridges:
                     continue
                 # No colocar launchers en el anillo de barriers del bastion
-                if spot in self.barrier_ring:
-                    continue
+                #if spot in self.barrier_ring:
+                 #   continue
                 env = c.get_tile_env(spot)
                 if env in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
                     continue
@@ -1005,8 +1007,8 @@ class Harvester:
                 continue
 
             # No construir defensas en el anillo de barriers del bastion
-            if objetivo in self.barrier_ring:
-                continue
+            #if objetivo in self.barrier_ring:
+             #   continue
 
             # Acercarnos si no está en visión
             if not c.is_in_vision(objetivo):
@@ -1274,8 +1276,8 @@ class Harvester:
             if b_pos == self.last_bridge_end:
                 continue  # Evitar conectar al puente que acabamos de poner
             # No apuntar puentes al anillo de barriers
-            if b_pos in self.barrier_ring:
-                continue
+            #if b_pos in self.barrier_ring:
+             #   continue
 
             if self._is_connected_to_base(c, b):
                 chain_candidates.append(b_pos)
@@ -1320,8 +1322,8 @@ class Harvester:
                     continue
 
                 # No usar casillas del anillo de barriers como destino intermedio de puente
-                if candidate in self.barrier_ring:
-                    continue
+                #if candidate in self.barrier_ring:
+                 #   continue
 
                 env = c.get_tile_env(candidate)
                 if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE, Environment.WALL):
@@ -1368,8 +1370,8 @@ class Harvester:
                 continue  # fuera de alcance directo, no sirve como end
 
             # No usar casillas del anillo como destino de puente
-            if b_pos in self.barrier_ring:
-                continue
+            #if b_pos in self.barrier_ring:
+             #   continue
 
             # Seguir la cadena hasta el endpoint final
             end_point = c.get_bridge_target(b)

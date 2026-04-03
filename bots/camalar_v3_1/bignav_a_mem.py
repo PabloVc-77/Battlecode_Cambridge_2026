@@ -77,8 +77,8 @@ def _can_move(c: Controller, d: Direction, w: int, h: int) -> bool:
     if not _in_bounds(nxt, w, h):
         return False
     id = c.get_tile_building_id(nxt)
-    if id is not None and c.get_entity_type(id) == EntityType.BARRIER and c.get_team(id) == c.get_team():
-        return True
+    #if id is not None and c.get_entity_type(id) == EntityType.BARRIER and c.get_team(id) == c.get_team():
+    #    return True
     if c.get_entity_type(id) == EntityType.MARKER:
         return True
     return c.can_move(d) or c.is_tile_empty(nxt) or c.is_tile_passable(nxt)

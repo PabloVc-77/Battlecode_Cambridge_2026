@@ -113,8 +113,17 @@ class Defensivo:
                 return
 
 
-        circulo = self.obtener_anillo_16_casillas(c, nodePosition)
+        circulo, cura_conv = self.obtener_anillo_16_casillas(c, nodePosition)
         obj = None
+        if len(cura_conv) > 0:
+            obj = cura_conv[0][0]
+            direc = self.navegador.moveTo(c, obj, False)
+
+            c.draw_indicator_dot( obj, 227, 0, 155) # Rosa Chillón
+            if c.can_heal(obj):
+                c.heal(obj)
+            elif c.can_move(direc):
+                c.move(direc)
         if len(circulo) > 0:
             obj = circulo[0]
         else:
@@ -122,7 +131,7 @@ class Defensivo:
             pass
         
         if obj is not None:
-            c.draw_indicator_dot( obj, 186, 227, 0)
+            c.draw_indicator_dot( obj, 186, 227, 0) # Verde limón
             cdir = _conveyor_dir_to_core(obj, nodePosition)
 
             if not self._clear_tile(c, obj):
@@ -142,6 +151,7 @@ class Defensivo:
         cx = centro.x
         cy = centro.y
         casillas_validas = []
+        cura_conv = []
 
         furnace = None
         if self.furnace_pos is not None:
@@ -158,18 +168,19 @@ class Defensivo:
                     if _is_in_bounds(c, pos) and c.is_in_vision(pos):
                         something = c.get_tile_building_id(pos)
                         if c.is_tile_empty(pos) or (c.get_entity_type(something) not in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR) and c.is_tile_passable(pos)):
-                            casillas_validas.append(pos)
-                        elif self.furnace_pos is not None and c.is_in_vision(self.furnace_pos) and c.get_entity_type(furnace) == EntityType.FOUNDRY and c.get_entity_type(something) in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
-                            dir_conv = c.get_direction(something)
-                            if not _is_diagonal(dir_conv) and dir_conv != pos.direction_to(self.furnace_pos):
-                                casillas_validas.append(pos)
+                            if self.furnace_pos is None or pos != self.furnace_pos:
+                                if self.splitter_pos is None or pos != self.splitter_pos:
+                                    casillas_validas.append(pos)
+                        elif something is not None and c.get_entity_type(something) in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR) and c.get_hp(something) < c.get_max_hp(something):
+                            cura_conv.append((pos, c.get_hp(something)))
 
         casillas_validas.sort(key=lambda p: centro.distance_squared(p))
+        cura_conv.sort(key=lambda x: x[1]) # Ordenar de menor a mayor por vida que le falta
 
         for w in casillas_validas:
             c.draw_indicator_dot(w, 245, 39, 204)
                         
-        return casillas_validas
+        return casillas_validas, cura_conv
 
     def mision_axionite(self, c: Controller, nodePosition: Position):
         splitter_pos = self.splitter_pos
