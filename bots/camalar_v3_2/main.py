@@ -25,6 +25,7 @@ from botRolex.bastion import Bastion
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
 from torretaRolex.launcher import Launcher
+from torretaRolex.gunner import run_gunner
 
 class Player:
     def __init__(self):
@@ -46,7 +47,7 @@ class Player:
                 if round == 1:
                     self.brain = Defensivo(ct) # defensivo
                 elif round == 2:
-                    self.brain = Bastion(ct)
+                    self.brain = Harvester(ct)
                 else:
                     self.brain = Harvester(ct) # normal
                     
@@ -57,11 +58,9 @@ class Player:
         elif etype == EntityType.BREACH:
             run_breach(self, ct)
         elif etype == EntityType.LAUNCHER:
+            run_gunner(self, ct)
+        elif etype == EntityType.LAUNCHER:
             if self.brain is None:
                 self.brain = Launcher(ct)
             
             self.brain.run(ct)
-
-            
-                
-

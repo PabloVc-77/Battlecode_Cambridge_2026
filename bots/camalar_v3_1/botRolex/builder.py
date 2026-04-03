@@ -116,7 +116,7 @@ class Harvester:
             # mode 3: revisar estructura (Naranja)
             # mode 4: conveyor mode (Azul Oscuro)
             # mode 6: colocar launcher junto a puente recién construido (Amarillo)
-            # mode 7: colocar defensas alrededor del harvester
+            # mode 7: colocar defensas alrededor del harvester (Azul Claro)
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
         self.check_pos = None
