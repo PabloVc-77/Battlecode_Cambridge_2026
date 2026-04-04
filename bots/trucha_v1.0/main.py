@@ -20,7 +20,7 @@ from botRolex.builder import Harvester
 from botRolex.builderTorretas import Torreta
 from botRolex.defensivo import Defensivo
 from botRolex.builderMuros import Muros
-from botRolex.healer import Healer
+from botRolex.healer2 import Healer
 
 # TORRETAS
 from torretaRolex.sentinel import run_sentinel

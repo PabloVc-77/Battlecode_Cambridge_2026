@@ -102,7 +102,7 @@ class Defensivo:
         if c.can_heal(current):
             c.heal(current)
 
-        direc = current.direction_to(nodePosition)
+        direc = self.navegador.moveTo(c, nodePosition, False)
 
         # AXIONITE MISION
         entradas = is_there_axionite(c, nodePosition)
@@ -136,7 +136,7 @@ class Defensivo:
             elif c.can_build_conveyor(obj, cdir):
                 c.build_conveyor(obj, cdir)
             else:
-                direc = current.direction_to(obj)
+                direc = self.navegador.moveTo(c, obj, False)
 
         if(c.can_move(direc)):
             c.move(direc)
@@ -208,7 +208,7 @@ class Defensivo:
         if c.is_in_vision(splitter_pos):
             b_id_at_split = c.get_tile_building_id(splitter_pos)
         else:
-            dir = current.direction_to(splitter_pos)
+            dir = self.navegador.moveTo(c, splitter_pos, False)
             if c.can_move(dir):
                 c.move(dir)
             return
@@ -220,7 +220,7 @@ class Defensivo:
                         self.splitter_dir = c.get_direction(b_id_at_split) # dirección: la misma del conveyor
                     c.destroy(splitter_pos)
             else:
-                direc = current.direction_to(splitter_pos)
+                direc = self.navegador.moveTo(c, splitter_pos, False)
                 if(c.can_move(direc)):
                     c.move(direc)
 
@@ -262,7 +262,7 @@ class Defensivo:
         if c.is_in_vision(furnace_pos):
             b_id_at_furnace = c.get_tile_building_id(furnace_pos)
         else:
-            dir = current.direction_to(furnace_pos)
+            dir = self.navegador.moveTo(c, furnace_pos, False)
             if c.can_move(dir):
                 c.move(dir)
             return
@@ -272,7 +272,7 @@ class Defensivo:
                 if c.can_destroy(furnace_pos):
                     c.destroy(furnace_pos)
                 else:
-                    direc = current.direction_to(furnace_pos)
+                    direc = self.navegador.moveTo(c, furnace_pos, False)
                     if(c.can_move(direc)):
                         c.move(direc)
             elif b_id_at_furnace is None:
@@ -292,7 +292,7 @@ class Defensivo:
             if c.is_in_vision(p):
                 conveyor = c.get_tile_building_id(p)
             else:
-                dir = c.get_position().direction_to(p)
+                dir = self.navegador.moveTo(c, p, False)
                 if c.can_move(dir):
                     c.move(dir)
                 return

@@ -521,14 +521,15 @@ class Harvester:
                                 self.recolectores_set.discard(tile)
                         continue
                     else:
-                        if tile in self.recolectores_set:
-                            self.recolectores.remove(tile)
-                            self.recolectores_set.discard(tile)
-                        if tile in self.objetivos_set:
-                            self.objetivos.remove(tile)
-                            self.objetivos_set.discard(tile)
-                            changed = True
-                        continue
+                        if not (c.is_tile_passable(tile) or (c.get_entity_type(building_id) == EntityType.BARRIER and c.get_team() == c.get_team(building_id))):
+                            if tile in self.recolectores_set:
+                                self.recolectores.remove(tile)
+                                self.recolectores_set.discard(tile)
+                            if tile in self.objetivos_set:
+                                self.objetivos.remove(tile)
+                                self.objetivos_set.discard(tile)
+                                changed = True
+                            continue
 
                 if tile not in self.objetivos_set:
                     self.objetivos.append(tile)
