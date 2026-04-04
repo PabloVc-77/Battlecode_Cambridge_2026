@@ -197,6 +197,9 @@ class Healer:
         """
         route = [start]
         visited: set[Position] = {start}
+        if self.patrol_route is not None:
+            for p in self.patrol_route:
+                visited.add(p)
         MAX_STEPS = 80
 
         for _ in range(MAX_STEPS):
@@ -211,7 +214,7 @@ class Healer:
                     continue
                 if etype not in TRANSPORT_TYPES and etype != EntityType.HARVESTER:
                     continue
-                if not c.is_in_vision(pos):
+                if not c.is_in_vision(pos): # no debería de ocurrir
                     continue
 
                 bid = c.get_tile_building_id(pos)
@@ -255,7 +258,8 @@ class Healer:
             bid = c.get_tile_building_id(next_pos)
             if bid is not None and c.get_entity_type(bid) == EntityType.HARVESTER:
                 break
-
+        
+        route.pop() # quitamos el start
         return route
 
     def _build_patrol_route(self, c: Controller) -> list[Position]:
@@ -283,14 +287,13 @@ class Healer:
                 continue
 
             chain = self._follow_chain_from(c, eb)
+            chain.insert(0, eb)
             if len(chain) > 1:  # al menos end_bridge + un eslabón más
-                route = chain
-                if self.core_pos is not None and (not route or route[0] != self.core_pos):
-                    route = [self.core_pos] + route
-                return route
+                return chain
 
         # Sin cadena visible: ir al core y esperar
-        return [self.core_pos] if self.core_pos else []
+        self.patrol_direction = 0
+        return []
 
     def _refresh_patrol_route(self, c: Controller, advance_eb: bool = False):
         """
@@ -314,19 +317,33 @@ class Healer:
         current = c.get_position()
 
         # Reconstruir ruta si está vacía
-        if not self.patrol_route:
+        if not self.patrol_route or self.patrol_direction == 0:
             self._refresh_patrol_route(c)
 
         if not self.patrol_route:
             c.draw_indicator_dot(current, 128, 128, 128)
             return
+        
+        for p in self.patrol_route:
+            c.draw_indicator_dot(p, 87, 39, 245) # Azul oscuro
 
         if current == self.patrol_route[self.patrol_index]:
-            self.patrol_index += 1
+            self.patrol_index += self.patrol_direction
+        self.patrol_index = max(0, min(self.patrol_index, len(self.patrol_route) - 1))
 
-        self.patrol_route.append(self._follow_chain_from(c, self.patrol_route[len(self.patrol_route) - 1]))
+        if self.patrol_direction > 0:
+            self.patrol_route.extend(self._follow_chain_from(c, self.patrol_route[len(self.patrol_route) - 1]))
 
         target = self.patrol_route[self.patrol_index]
+
+        try:
+            if c.is_in_vision(target) and c.get_entity_type(c.get_tile_building_id(target)) == EntityType.HARVESTER:
+                # Volver a casa?
+                self.patrol_direction = -1
+                pass
+        except Exception:
+            # Algo esta roto
+            pass
 
         c.draw_indicator_dot(target, 0, 200, 255)
         c.draw_indicator_line(current, target, 0, 200, 255)
