@@ -54,7 +54,7 @@ class Player:
 
                 round = ct.get_current_round()
                 if round > 50:
-                    if ct.get_id() % 5 == 0:
+                    if ct.get_id() % 5 == 0 or ct.get_id() % 5 == 1:
                         self.brain = Healer(ct) # torreta
                     elif ct.get_id() % 5 == 2 or ct.get_id() % 5 == 3: #2 de cada 5
                         self.brain = Muros(ct)

@@ -321,31 +321,12 @@ class Healer:
             c.draw_indicator_dot(current, 128, 128, 128)
             return
 
-        # Clampar índice
-        self.patrol_index = max(0, min(self.patrol_index, len(self.patrol_route) - 1))
+        if current == self.patrol_route[self.patrol_index]:
+            self.patrol_index += 1
+
+        self.patrol_route.append(self._follow_chain_from(c, self.patrol_route[len(self.patrol_route) - 1]))
+
         target = self.patrol_route[self.patrol_index]
-
-        # Avanzar waypoint cuando llegamos suficientemente cerca
-        if current.distance_squared(target) <= 2:
-            self.patrol_index += self.patrol_direction
-
-            if self.patrol_index >= len(self.patrol_route):
-                # Llegamos al harvester (extremo final): invertir, rotar end_bridge al volver
-                self.patrol_direction = -1
-                self.patrol_index = len(self.patrol_route) - 2
-
-            elif self.patrol_index < 0:
-                # Llegamos de vuelta a la base: invertir y construir nueva ruta
-                # (potencialmente con otro end_bridge / harvester)
-                self._refresh_patrol_route(c, advance_eb=True)
-                return  # la ruta ya fue reconstruida con index=0, direction=+1
-
-            # Clampar tras ajuste
-            if self.patrol_route:
-                self.patrol_index = max(0, min(self.patrol_index, len(self.patrol_route) - 1))
-                target = self.patrol_route[self.patrol_index]
-            else:
-                return
 
         c.draw_indicator_dot(target, 0, 200, 255)
         c.draw_indicator_line(current, target, 0, 200, 255)
