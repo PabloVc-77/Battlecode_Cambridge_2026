@@ -68,7 +68,10 @@ def _is_conv_better(c: Controller, ini: Position, end: Position):
 
             building_id = c.get_tile_building_id(neighbor)
             if building_id is not None:
-                if not c.is_tile_passable(neighbor):
+                entity = c.get_entity_type(building_id)
+                if not c.is_tile_passable(neighbor) and (entity != EntityType.BARRIER or c.get_team() != c.get_team(building_id)):
+                    continue
+                if entity in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.BRIDGE, EntityType.SPLITTER) and c.get_team() == c.get_team(building_id):
                     continue
 
             visited.add(neighbor)
@@ -103,14 +106,9 @@ class Harvester:
             # mode 2: go home (Rojo)
             # mode 3: revisar estructura (Naranja)
             # mode 4: conveyor mode (Azul Oscuro)
-            # mode 5: torretas en primer harvester (Azul)
-            # mode 6: colocar launcher junto a puente recién construido (Amarillo)
-            # mode 7: colocar defensas alrededor del harvester
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
         self.check_pos = None
-
-        self.sentinel_placed = False
 
         # Variables de puentes
         self.bridge_origin = None         # casilla origen del puente pendiente de construir
@@ -119,19 +117,12 @@ class Harvester:
         self.recolectores = []
         self.turret_places = []
 
-        self.first_bridge = None          # posición del primer puente construido (modo 5)
-        self.is_first_builder = c.get_current_round() == 2  # Bug fix: round() es built-in de Python
-
-        # Launcher mode vars
-        self.pending_launcher_bridges = []  # cola de posiciones de puente que necesitan launcher
-        self.mode_after_launcher = 2        # modo al que volver tras colocar el launcher
-
         # Cache de IDs de puentes verificados como conectados a la base en este turno
         self._connected_cache: dict[int, bool] = {}
 
         builds = c.get_nearby_buildings()
         for b in builds:
-            if c.get_entity_type(b) == EntityType.CORE:
+            if c.get_entity_type(b) == EntityType.CORE and c.get_team() == c.get_team(b):
                 self.spawn = c.get_position(b)
                 break
 
@@ -177,6 +168,9 @@ class Harvester:
         if c.can_heal(current):
             c.heal(current)
 
+        if self.mode == 0:
+            c.draw_indicator_dot(current, 255, 255, 255)
+            self.buscar_material(c, current)
         if self.mode == 1:
             c.draw_indicator_dot(current, 24, 184, 69)
             self.place_bridge_ore(c)
@@ -193,21 +187,63 @@ class Harvester:
             c.draw_indicator_dot(current, 26, 42, 219)
             self.place_conveyors(c)
             return
-        elif self.mode == 5:
-            c.draw_indicator_dot(current, 26, 42, 219)
-            self.reforzar_harvester(c)
-            return
-        elif self.mode == 6:
-            c.draw_indicator_dot(current, 255, 215, 0)
-            self.colocar_launcher(c)
-            return
-        elif self.mode == 7:
-            c.draw_indicator_dot(current, 100, 200, 200)
-            self.colocar_defensas(c, self.current_target)
-            return
 
-        c.draw_indicator_dot(current, 255, 255, 255)
 
+        
+
+    # helper de mode 0
+    def oreCerca(self, c: Controller):
+        lista = c.get_nearby_tiles()
+        changed = False
+        ronda = c.get_current_round()
+        for tile in lista:
+            env = c.get_tile_env(tile)  # llamada única por tile
+            es_mineral = (env == Environment.ORE_TITANIUM or
+                          (env == Environment.ORE_AXIONITE and ronda >= 100))
+
+            if es_mineral:
+                building_id = c.get_tile_building_id(tile)
+
+                if building_id is not None:
+                    if c.get_entity_type(building_id) == EntityType.HARVESTER:
+                        if not revisor_casillas_extractor(c, tile):
+                            if tile not in self.recolectores_set:
+                                self.recolectores.append(tile)
+                                self.recolectores_set.add(tile)
+                        else:
+                            if tile in self.recolectores_set:
+                                self.recolectores.remove(tile)
+                                self.recolectores_set.discard(tile)
+                        continue
+                    else:
+                        if not (c.is_tile_passable(tile) or (c.get_entity_type(building_id) == EntityType.BARRIER and c.get_team() == c.get_team(building_id))):
+                            if tile in self.recolectores_set:
+                                self.recolectores.remove(tile)
+                                self.recolectores_set.discard(tile)
+                            if tile in self.objetivos_set:
+                                self.objetivos.remove(tile)
+                                self.objetivos_set.discard(tile)
+                                changed = True
+                            continue
+
+                if tile not in self.objetivos_set:
+                    self.objetivos.append(tile)
+                    self.objetivos_set.add(tile)
+                    changed = True
+
+            else:
+                if tile in self.objetivos_set:
+                    self.objetivos.remove(tile)
+                    self.objetivos_set.discard(tile)
+                    changed = True
+
+        if changed:
+            current = c.get_position()
+            self.objetivos.sort(key=lambda p: current.distance_squared(p))
+
+    # MODE 0
+
+    def buscar_material(self, c: Controller, current: Position):
         self.oreCerca(c)
         target = None
         entityID = c.get_tile_building_id(current)
@@ -342,6 +378,7 @@ class Harvester:
             end = self.bridge_destination
         else:
             target_end = self._find_best_bridge_end(place, c, nearby_builds)
+            end = target_end
             if target_end is None:
                 self.mode = 0
                 return
@@ -353,23 +390,16 @@ class Harvester:
                 conv_pos, conv_dir = conv_path[0]
                 if c.can_build_armoured_conveyor(conv_pos, conv_dir):
                     c.build_armoured_conveyor(conv_pos, conv_dir)
+                    self.conveyor_path.pop(0)
+                    self.last_bridge_end = conv_pos.add(conv_dir)
                 elif c.can_build_conveyor(conv_pos, conv_dir):
                     c.build_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop(0)
                     self.last_bridge_end = conv_pos.add(conv_dir)
-                self.mode_after_conv = 1
                 self.mode = 4
                 return
 
             c.draw_indicator_dot(target_end, 255, 255, 255)
-
-            if c.can_build_bridge(place, target_end):
-                end = target_end
-            else:
-                end = self._find_bridge_step(place, target_end, c, nearby_builds)
-                if end is None:
-                    self.mode = 0
-                    return
 
         c.draw_indicator_dot(end, 255, 255, 255)
 
@@ -380,27 +410,23 @@ class Harvester:
                 and c.get_team(building_id_place) == c.get_team()):
             if c.can_destroy(place):
                 c.destroy(place)
-            return
 
         if c.can_build_bridge(place, end):
             c.build_bridge(place, end)
             self.last_bridge_end = end
-            self.pending_launcher_bridges.append(place)
             self.last_bridge_built_pos = place
             self.bridge_destination = None
             self.bridge_origin = None
 
             if end in self.end_bridges:
-                self.mode_after_launcher = 0
+                self.mode = 0
                 self.last_bridge_end = None
             elif (c.is_in_vision(end)
                   and c.get_tile_building_id(end) is not None
-                  and c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE):
-                self.mode_after_launcher = 3
+                  and c.get_entity_type(c.get_tile_building_id(end)) in (EntityType.BRIDGE, EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.SPLITTER)):
+                self.mode = 3
             else:
-                self.mode_after_launcher = 2
-
-            self.mode = 7
+                self.mode = 2
 
     # MODE 2
 
@@ -438,39 +464,31 @@ class Harvester:
                 self._try_move(c, dir)
                 return
 
-            c.draw_indicator_dot(target_end, 255, 255, 0)
+            c.draw_indicator_dot(target_end, 255, 255, 0) # Amarillo
 
             # Comprobar si conveyors son más baratas que un puente
             conv_path = _is_conv_better(c, bridge_end, target_end)
             self.conveyor_path = conv_path
             if conv_path is not None and len(conv_path) > 0:
                 conv_pos, conv_dir = conv_path[0]
-                if c.can_build_conveyor(conv_pos, conv_dir):
+                if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+                    c.build_armoured_conveyor(conv_pos, conv_dir)
+                    self.conveyor_path.pop(0)
+                    self.last_bridge_end = conv_pos.add(conv_dir)
+                elif c.can_build_conveyor(conv_pos, conv_dir):
                     c.build_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop(0)
                     self.last_bridge_end = conv_pos.add(conv_dir)
-                self.mode_after_conv = 2
                 self.mode = 4
                 return
-
-            if c.can_build_bridge(bridge_end, target_end):
-                end = target_end
-            else:
-                end = self._find_bridge_step(bridge_end, target_end, c, nearby_builds)
-                if end is None:
-                    dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
-                    next_pos = current.add(dir)
-                    if c.can_build_road(next_pos):
-                        c.build_road(next_pos)
-                    self._try_move(c, dir)
-                    return
+            end = target_end
 
         if c.is_in_vision(bridge_end):
             if not self._clear_tile(c, bridge_end):
                 return  # Aún no lo hemos roto
 
         # Quitar barrier propia en bridge_end si la hay
-        building_id_be = c.get_tile_building_id(bridge_end)
+        building_id_be = c.get_tile_building_id(bridge_end) # Should not happen
         if (building_id_be is not None
                 and c.get_entity_type(building_id_be) == EntityType.BARRIER
                 and c.get_team(building_id_be) == c.get_team()):
@@ -483,70 +501,18 @@ class Harvester:
             c.build_bridge(bridge_end, end)
             self.last_bridge_end = end
             self.last_bridge_built_pos = bridge_end
-            self.pending_launcher_bridges.append(bridge_end)
             self.bridge_destination = None
             self.bridge_origin = None
 
             if end in self.end_bridges:
-                self.mode_after_launcher = 0
+                self.mode = 0
                 self.last_bridge_end = None
             elif (c.is_in_vision(end)
                   and c.get_tile_building_id(end) is not None
                   and c.get_entity_type(c.get_tile_building_id(end)) == EntityType.BRIDGE):
-                self.mode_after_launcher = 3
+                self.mode = 3
             else:
-                self.mode_after_launcher = 2
-
-            self.mode = 6
-
-    def oreCerca(self, c: Controller):
-        lista = c.get_nearby_tiles()
-        changed = False
-        ronda = c.get_current_round()
-        for tile in lista:
-            env = c.get_tile_env(tile)  # llamada única por tile
-            es_mineral = (env == Environment.ORE_TITANIUM or
-                          (env == Environment.ORE_AXIONITE and ronda >= 100))
-
-            if es_mineral:
-                building_id = c.get_tile_building_id(tile)
-
-                if building_id is not None:
-                    if c.get_entity_type(building_id) == EntityType.HARVESTER:
-                        if not revisor_casillas_extractor(c, tile):
-                            if tile not in self.recolectores_set:
-                                self.recolectores.append(tile)
-                                self.recolectores_set.add(tile)
-                        else:
-                            if tile in self.recolectores_set:
-                                self.recolectores.remove(tile)
-                                self.recolectores_set.discard(tile)
-                        continue
-                    else:
-                        if not (c.is_tile_passable(tile) or (c.get_entity_type(building_id) == EntityType.BARRIER and c.get_team() == c.get_team(building_id))):
-                            if tile in self.recolectores_set:
-                                self.recolectores.remove(tile)
-                                self.recolectores_set.discard(tile)
-                            if tile in self.objetivos_set:
-                                self.objetivos.remove(tile)
-                                self.objetivos_set.discard(tile)
-                                changed = True
-                            continue
-
-                if tile not in self.objetivos_set:
-                    self.objetivos.append(tile)
-                    self.objetivos_set.add(tile)
-                    changed = True
-
-            else:
-                if tile in self.objetivos_set:
-                    self.objetivos.remove(tile)
-                    self.objetivos_set.discard(tile)
-                    changed = True
-
-        if changed:
-            current = c.get_position()
-            self.objetivos.sort(key=lambda p: current.distance_squared(p))
+                self.mode = 2
 
     # MODE 3
 
@@ -556,7 +522,7 @@ class Harvester:
         if self.check_pos is None:
             self.check_pos = self.last_bridge_end
 
-        if self.check_pos is None:
+        if self.check_pos is None: # No debería pasar?
             self.mode = 0
             return
 
@@ -566,7 +532,7 @@ class Harvester:
             self.last_bridge_end = None
             return
 
-        c.draw_indicator_dot(self.check_pos, 255, 128, 0)
+        c.draw_indicator_dot(self.check_pos, 255, 128, 0) # Naranja
 
         if not c.is_in_vision(self.check_pos):
             dir = self.navegador.moveTo(c, self.check_pos, four_dirs=False)
@@ -574,11 +540,14 @@ class Harvester:
             if c.can_build_road(next_pos):
                 c.build_road(next_pos)
             self._try_move(c, dir)
+
+        if not c.is_in_vision(self.check_pos):
             return
 
         building_id = c.get_tile_building_id(self.check_pos)
+        entity = c.get_entity_type(building_id)
 
-        if building_id is None or c.get_entity_type(building_id) != EntityType.BRIDGE:
+        if building_id is None or entity not in (EntityType.BRIDGE, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER):
             self.last_bridge_end = self.check_pos
             self.check_pos = None
             self.mode = 2
@@ -590,7 +559,18 @@ class Harvester:
             self.mode = 2
             return
 
-        next_check = c.get_bridge_target(building_id)
+        next_check = None
+        if entity == EntityType.BRIDGE:
+            next_check = c.get_bridge_target(building_id)
+        elif entity in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+            next_check = self.check_pos.add(c.get_direction(building_id))
+        else:
+            # Es un splitter
+            # No debería de pasar por ahora
+            self.mode = 0
+            self.check_pos = None
+            self.last_bridge_end = None
+            return
 
         if next_check is None:
             self.last_bridge_end = self.check_pos
@@ -607,13 +587,14 @@ class Harvester:
         Coloca conveyor a conveyor siguiendo self.conveyor_path (lista de (pos, dir)).
         Al terminar, vuelve a self.mode_after_conv.
         """
-        if not self.conveyor_path:
-            self.mode = self.mode_after_conv
+        if not self.conveyor_path: #No debería ocurrir casi Nunca?
+            self._check_conveyor_chain_end(c, self.last_bridge_end)
             return
 
         current = c.get_position()
         conv_pos, conv_dir = self.conveyor_path[0]
 
+        # Azul Oscuro
         c.draw_indicator_dot(conv_pos, 26, 42, 219)
         c.draw_indicator_line(current, conv_pos, 26, 42, 219)
 
@@ -702,216 +683,7 @@ class Harvester:
                             EntityType.ARMOURED_CONVEYOR)):
                     self.mode = 3
                     return
-            self.mode = self.mode_after_conv
-
-    # MODE 5
-
-    def reforzar_harvester(self, c: Controller):
-        self.turret_places.sort(key=lambda p: self.spawn.distance_squared(p))
-
-        if len(self.turret_places) == 0:
             self.mode = 2
-            end = None
-            if self.first_bridge is not None and c.is_in_vision(self.first_bridge):
-                bid = c.get_tile_building_id(self.first_bridge)
-                if bid is not None:
-                    end = c.get_bridge_target(bid)
-
-            if end is not None and end in self.end_bridges:
-                self.mode = 0
-                self.last_bridge_end = None
-            return
-
-        place_to_build = None
-        t_place = self.turret_places[0]
-        t_id = c.get_tile_building_id(t_place)
-        dir = t_place.direction_to(self.first_bridge) if self.first_bridge is not None else Direction.NORTH
-
-        if t_id is not None and c.get_entity_type(t_id) != EntityType.SENTINEL:
-            if c.can_destroy(t_place):
-                c.destroy(t_place)
-            if c.can_fire(t_place):
-                c.fire(t_place)
-
-        if c.can_build_sentinel(t_place, dir):
-            c.build_sentinel(t_place, dir)
-        elif place_to_build is None or (t_id is not None and c.get_entity_type(t_id) != EntityType.SENTINEL):
-            place_to_build = t_place
-
-        if place_to_build is None:
-            self.mode = 2
-            end = None
-            if self.first_bridge is not None and c.is_in_vision(self.first_bridge):
-                bid = c.get_tile_building_id(self.first_bridge)
-                if bid is not None:
-                    end = c.get_bridge_target(bid)
-
-            if end is not None and end in self.end_bridges:
-                self.mode = 0
-                self.last_bridge_end = None
-            return
-
-        current = c.get_position()
-        dist = current.distance_squared(place_to_build)
-        place_id = c.get_tile_building_id(place_to_build)
-        if dist > 2:
-            direc = self.navegador.moveTo(c, place_to_build, False)
-            move_pos = current.add(direc)
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-            if current.add(direc).distance_squared(place_to_build) != 0 or (place_id is not None and c.get_team(place_id) != c.get_team()):
-                self._try_move(c, direc)
-        elif dist == 0 and (place_id is None or c.get_team(place_id) == c.get_team()):
-            direc = self.navegador.moveTo(c, self.spawn, False)
-            move_pos = current.add(direc)
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-            self._try_move(c, direc)
-
-    # MODE 6
-
-    def _get_launcher_spot(self, c: Controller, bridge_pos: Position) -> Position | None:
-        """
-        Busca una casilla adyacente (dist² <= 2) a bridge_pos donde colocar un launcher.
-        Devuelve None si ya hay un launcher aliado cerca (no hace falta construir otro).
-        Prefiere la casilla más cercana al spawn.
-        """
-        candidates = []
-        for ddx in range(-1, 2):
-            for ddy in range(-1, 2):
-                if ddx == 0 and ddy == 0:
-                    continue
-                spot = Position(bridge_pos.x + ddx, bridge_pos.y + ddy)
-                if not self._in_bounds(spot):
-                    continue
-                if not c.is_in_vision(spot):
-                    continue
-                if spot in self.end_bridges:
-                    continue
-                env = c.get_tile_env(spot)
-                if env in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
-                    continue
-                if self.last_bridge_end is not None and self.last_bridge_end == spot:
-                    continue
-                building_id = c.get_tile_building_id(spot)
-                if building_id is not None:
-                    # Si ya hay un launcher aliado, no hace falta construir
-                    if c.get_entity_type(building_id) == EntityType.LAUNCHER and c.get_team(building_id) == c.get_team():
-                        return None
-                    if not c.is_tile_passable(spot):
-                        continue
-                    if c.get_entity_type(building_id) in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.SPLITTER, EntityType.BRIDGE) and c.get_team() == c.get_team(building_id):
-                        continue
-                    if c.get_entity_type(building_id) == EntityType.CORE:
-                        continue
-                candidates.append(spot)
-
-        if not candidates:
-            return None
-
-        candidates.sort(key=lambda p: self.spawn.distance_squared(p))
-        return candidates[0]
-
-    def colocar_launcher(self, c: Controller):
-        """Modo 6: coloca un launcher junto al puente pendiente, luego vuelve al modo anterior."""
-        if not self.pending_launcher_bridges:
-            self.mode = self.mode_after_launcher
-            return
-
-        bridge_pos = self.pending_launcher_bridges[0]
-        current = c.get_position()
-
-        spot = self._get_launcher_spot(c, bridge_pos)
-
-        if spot is None:
-            # Ya tiene launcher o no hay hueco — pasar al siguiente puente pendiente
-            self.pending_launcher_bridges.pop(0)
-            if not self.pending_launcher_bridges:
-                self.mode = self.mode_after_launcher
-            return
-
-        # Acercarnos si hace falta
-        if current.distance_squared(spot) > 2:
-            dir = self.navegador.moveTo(c, spot, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
-            return
-
-        # Limpiar si hay algo en el spot
-        if not self._clear_tile(c, spot):
-            return
-
-        if c.can_build_launcher(spot):
-            c.build_launcher(spot)
-            self.pending_launcher_bridges.pop(0)
-            if not self.pending_launcher_bridges:
-                self.mode = self.mode_after_launcher
-
-    # MODE 7
-
-    def colocar_defensas(self, c: Controller, harvester_pos: Position):
-        if harvester_pos is None:
-            self.mode = 6
-            return
-
-        candidates = [
-            harvester_pos.add(Direction.NORTH),
-            harvester_pos.add(Direction.EAST),
-            harvester_pos.add(Direction.SOUTH),
-            harvester_pos.add(Direction.WEST),
-        ]
-
-        # Determinar cuál casilla es la del puente (la más cercana a last_bridge_built_pos)
-        #sentinel_spot = None
-        #if self.last_bridge_built_pos is not None and not self.sentinel_placed:
-        #    closest = min(
-        #        [p for p in candidates if self._in_bounds(p) and self.last_bridge_built_pos != p and c.is_in_vision(p) and (c.is_tile_passable(p) or c.is_tile_empty(p))],
-        #        key=lambda p: p.distance_squared(self.last_bridge_built_pos),
-        #        default=None
-        #    )
-        #    sentinel_spot = closest
-
-        for objetivo in candidates:
-            if not self._in_bounds(objetivo):
-                continue
-
-            # Acercarnos si no está en visión
-            if not c.is_in_vision(objetivo):
-                dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
-                self._try_move(c, dir)
-                return
-
-            if c.get_tile_env(objetivo) in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
-                continue
-
-            building_id = c.get_tile_building_id(objetivo)
-            edificio_deseado = EntityType.BARRIER
-
-            if building_id is not None:
-                entity = c.get_entity_type(building_id)
-                team = c.get_team(building_id)
-
-                # Ya tiene lo que queremos: casilla resuelta
-                if entity == edificio_deseado and team == c.get_team():
-                    continue
-
-                if entity in (EntityType.BRIDGE, EntityType.SENTINEL) and team == c.get_team():
-                    continue
-
-                # Estructura enemiga: intentar destruirla
-                if not self._clear_tile(c, objetivo):
-                    return
-
-            # Casilla vacía o recién liberada: construir lo que toca
-            resultado = self.construir(c, objetivo, edificio_deseado)
-            if not resultado:
-                return
-
-        # Todas las casillas resueltas
-        self.sentinel_placed = False
-        self.mode = 6
 
     # UTILITY
 
@@ -1107,16 +879,271 @@ class Harvester:
         for cid in chain_ids:
             self._connected_cache[cid] = False
         return False
+    
+    # ── SCORING CONSTANTS ────────────────────────────────────────────────────────
+    # Ajusta estos valores para calibrar el comportamiento sin tocar la lógica.
 
-    def _find_best_bridge_end(self, place: Position, c: Controller, builds: list) -> Position | None:
-        """
-        Primero intenta conectar a un puente aliado cercano que ya esté conectado
-        a la base. Si no encuentra ninguno, usa end_bridges directamente.
-        Recibe `builds` (resultado de get_nearby_buildings) para no repetir la llamada.
-        """
-        # ── 1. Buscar puentes aliados cercanos conectados a la base ──────────────
-        chain_candidates = []
+    _MERGE_BONUS   =  500   # bonus por conectarse a infraestructura aliada ya conectada a base
+    _CARGO_PENALTY = -200   # penalización si la casilla destino tiene material en storage
+    _CROWD_PENALTY = -150   # penalización POR CADA vecino de transporte aliado extra (>1)
 
+    # ── HELPERS ──────────────────────────────────────────────────────────────────
+
+    def _is_connected_to_base(self, c: "Controller", bridge_id: int) -> bool:
+        """
+        Sigue la cadena desde bridge_id hasta su endpoint final.
+        Devuelve True si ese endpoint está en end_bridges O si la posición del
+        propio building ya es un nodo base.
+
+        La cadena puede continuar a través de puentes Y conveyors/armoured
+        conveyors aliados (estos últimos se siguen por su dirección de salida).
+        Usa _connected_cache (reiniciado cada turno) para no recorrer cadenas repetidas.
+        """
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+
+        if bridge_id in self._connected_cache:
+            return self._connected_cache[bridge_id]
+
+        visited_pos = set()
+        current_id  = bridge_id
+        chain_ids   = []
+
+        while current_id is not None:
+            if current_id in self._connected_cache:
+                result = self._connected_cache[current_id]
+                for cid in chain_ids:
+                    self._connected_cache[cid] = result
+                return result
+
+            pos = c.get_position(current_id)
+
+            # Si esta posición ya es un nodo base → conectado
+            if pos in self.end_bridges:
+                for cid in chain_ids:
+                    self._connected_cache[cid] = True
+                self._connected_cache[current_id] = True
+                return True
+
+            if pos in visited_pos:
+                break  # ciclo inesperado
+            visited_pos.add(pos)
+            chain_ids.append(current_id)
+
+            entity = c.get_entity_type(current_id)
+
+            # Determinar el siguiente nodo de la cadena
+            endpoint = None
+            if entity == EntityType.BRIDGE:
+                endpoint = c.get_bridge_target(current_id)
+            elif entity in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                try:
+                    endpoint = pos.add(c.get_direction(current_id))
+                except Exception:
+                    pass
+            elif entity == EntityType.SPLITTER:
+                # Splitter: nodo terminal a efectos de conectividad
+                break
+            else:
+                break
+
+            if endpoint is None:
+                break
+
+            # ¿El endpoint ya es un nodo base?
+            if endpoint in self.end_bridges:
+                for cid in chain_ids:
+                    self._connected_cache[cid] = True
+                return True
+
+            if not c.is_in_vision(endpoint):
+                break
+
+            next_id = c.get_tile_building_id(endpoint)
+            if next_id is None:
+                break
+            if c.get_team(next_id) != c.get_team():
+                break
+            if c.get_entity_type(next_id) not in transport_types:
+                break
+
+            current_id = next_id
+
+        for cid in chain_ids:
+            self._connected_cache[cid] = False
+        return False
+
+    def _transport_congestion_penalty(self, c: "Controller", bid: int, pos: "Position") -> int:
+        """
+        Devuelve la penalización de congestión para un nodo de transporte aliado en `pos`.
+
+        Componentes:
+          - _CARGO_PENALTY  si el edificio tiene material en storage.
+          - _CROWD_PENALTY * max(0, vecinos_transporte_aliados - 1)
+            «vecinos de transporte» = las 8 casillas adyacentes con un
+            bridge/conveyor/armoured_conveyor/splitter aliado.
+        """
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+
+        penalty = 0
+
+        # Penalización por carga
+        try:
+            if c.get_stored_resource(bid) is not None:
+                penalty += self._CARGO_PENALTY
+        except Exception:
+            pass
+
+        # Penalización por vecinos concurridos
+        neighbour_count = 0
+        for ddx in range(-1, 2):
+            for ddy in range(-1, 2):
+                if ddx == 0 and ddy == 0:
+                    continue
+                nb = Position(pos.x + ddx, pos.y + ddy)
+                if not self._in_bounds(nb):
+                    continue
+                if not c.is_in_vision(nb):
+                    continue
+                nb_id = c.get_tile_building_id(nb)
+                if nb_id is None:
+                    continue
+                if (c.get_team(nb_id) == c.get_team()
+                        and c.get_entity_type(nb_id) in transport_types):
+                    neighbour_count += 1
+
+        penalty += self._CROWD_PENALTY * max(0, neighbour_count - 1)
+        return penalty
+
+    def _find_best_bridge_end(
+        self,
+        place: "Position",
+        c: "Controller",
+        builds: list,
+    ) -> "Position | None":
+        """
+        Devuelve la mejor casilla destino (dist² ≤ 9 desde `place`) para el
+        siguiente puente, fusionando la lógica de conexión a redes existentes
+        con la búsqueda de paso óptimo hacia el nodo base más cercano.
+
+        end_bridges son conveyors/splitters aliados junto al spawn. Un candidato
+        que ya sea uno de esos nodos, o que pertenezca a una cadena conectada a
+        uno, recibe MERGE_BONUS. La congestión lo penaliza.
+
+        Score = -remaining_sq_to_nearest_end_bridge
+              + dot_product          (desempate direccional)
+              + MERGE_BONUS          (si conectado a base)
+              + congestion_penalty   (cargo + vecinos extra)
+        """
+        import math as _math
+
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+
+        # Objetivo final: nodo base más cercano distinto de last_bridge_end
+        sorted_ends = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
+        final_target: "Position | None" = None
+        for e in sorted_ends:
+            if e != self.last_bridge_end and self._in_bounds(e):
+                final_target = e
+                break
+
+        if final_target is None:
+            return None
+
+        dx = final_target.x - place.x
+        dy = final_target.y - place.y
+        dist_to_final = _math.sqrt(dx * dx + dy * dy)
+        if dist_to_final == 0:
+            return None
+        ux, uy = dx / dist_to_final, dy / dist_to_final
+
+        best_pos:   "Position | None" = None
+        best_score: float | None      = None
+
+        # ── Candidatos: cuadrícula 7×7 centrada en place (dist² ≤ 9) ────────────
+        for ddx in range(-3, 4):
+            for ddy in range(-3, 4):
+                d_sq = ddx * ddx + ddy * ddy
+                if d_sq == 0 or d_sq > 9:
+                    continue
+
+                candidate = Position(place.x + ddx, place.y + ddy)
+
+                if candidate == self.last_bridge_end:
+                    continue
+                if not self._in_bounds(candidate):
+                    continue
+                if not c.is_in_vision(candidate):
+                    continue
+
+                env = c.get_tile_env(candidate)
+                if env in (
+                    Environment.ORE_TITANIUM,
+                    Environment.ORE_AXIONITE,
+                    Environment.WALL,
+                ):
+                    continue
+
+                merge_bonus    = 0
+                congestion_pen = 0
+
+                bid = c.get_tile_building_id(candidate)
+
+                if bid is not None:
+                    entity = c.get_entity_type(bid)
+                    team   = c.get_team(bid)
+
+                    if team == c.get_team():
+                        if entity in transport_types:
+                            # Nodo base directamente → bonus máximo + penalización igual que cualquier otro
+                            if candidate in self.end_bridges:
+                                merge_bonus    = self._MERGE_BONUS
+                                congestion_pen = self._transport_congestion_penalty(
+                                    c, bid, candidate
+                                )
+                            elif self._is_connected_to_base(c, bid):
+                                merge_bonus    = self._MERGE_BONUS
+                                congestion_pen = self._transport_congestion_penalty(
+                                    c, bid, candidate
+                                )
+                            else:
+                                # No conectado: solo penalización (puede ser útil de todas formas)
+                                congestion_pen = self._transport_congestion_penalty(
+                                    c, bid, candidate
+                                )
+                        elif entity == EntityType.CORE:
+                            pass  # no bloquea
+                        elif not c.is_tile_passable(candidate):
+                            continue  # estructura aliada no transitable
+                    else:
+                        if not c.is_tile_passable(candidate):
+                            continue  # estructura enemiga no transitable
+
+                remaining_sq = candidate.distance_squared(final_target)
+                dot          = ddx * ux + ddy * uy
+                score        = -remaining_sq + dot + merge_bonus + congestion_pen
+
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_pos   = candidate
+
+        # ── Puentes aliados visibles: evaluar con remaining_sq desde su endpoint real ──
+        # Esto cubre el caso en que el puente está en rango pero su cadena llega
+        # mucho más cerca del objetivo que lo que indica su posición directa.
         for b in builds:
             if c.get_team(b) != c.get_team():
                 continue
@@ -1129,89 +1156,44 @@ class Harvester:
             if b_pos == self.last_bridge_end:
                 continue
 
-            if self._is_connected_to_base(c, b):
-                chain_candidates.append(b_pos)
-
-        # ── 2. Si hay candidatos de cadena, usar el más cercano a place ──────────
-        if chain_candidates:
-            chain_candidates.sort(key=lambda p: place.distance_squared(p))
-            return chain_candidates[0]
-
-        # ── 3. Comportamiento original: apuntar a end_bridges ────────────────────
-        candidates = sorted(self.end_bridges, key=lambda p: place.distance_squared(p))
-        for end in candidates:
-            if end == self.last_bridge_end:
-                continue
-            if self._in_bounds(end):
-                return end
-
-        return None
-
-    def _find_bridge_step(self, place: Position, target: Position, c: Controller, builds: list) -> Position | None:
-        """Solo se ejecuta si el puente directo no alcanza. Bucle 7x7 + puentes aliados visibles."""
-        dx = target.x - place.x
-        dy = target.y - place.y
-        dist = math.sqrt(dx * dx + dy * dy)
-        ux, uy = dx / dist, dy / dist
-
-        best: Position | None = None
-        best_score: tuple | None = None  # (-remaining_sq, dot) — mayor = mejor
-
-        for ddx in range(-3, 4):
-            for ddy in range(-3, 4):
-                d_sq = ddx * ddx + ddy * ddy
-                if d_sq == 0 or d_sq > 9:
-                    continue
-                dot = ddx * ux + ddy * uy
-                if dot <= 0:
-                    continue
-
-                candidate = Position(place.x + ddx, place.y + ddy)
-                if not self._in_bounds(candidate) or not c.is_in_vision(candidate):
-                    continue
-
-                env = c.get_tile_env(candidate)
-                if env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE, Environment.WALL):
-                    continue
-
-                building_id = c.get_tile_building_id(candidate)
-                if building_id is not None:
-                    entity_type = c.get_entity_type(building_id)
-                    if c.get_team(building_id) != c.get_team() and not c.is_tile_passable(candidate):
-                        continue
-                    if entity_type not in (EntityType.ROAD, EntityType.CONVEYOR,
-                                        EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER,
-                                        EntityType.FOUNDRY):
-                        continue
-
-                remaining_sq = candidate.distance_squared(target)
-                score = (-remaining_sq, dot)
-                if best_score is None or score > best_score:
-                    best_score = score
-                    best = candidate
-
-        # Puentes aliados visibles como destino intermedio
-        for b in builds:
-            if c.get_team(b) != c.get_team():
-                continue
-            if c.get_entity_type(b) != EntityType.BRIDGE:
-                continue
-
-            b_pos = c.get_position(b)
-            if place.distance_squared(b_pos) > 9:
-                continue
-
+            # Seguir cadena hasta endpoint real (con límite de saltos anti-bucle)
             end_point = c.get_bridge_target(b)
-            end_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
-            while end_id is not None and c.get_entity_type(end_id) == EntityType.BRIDGE:
-                end_point = c.get_bridge_target(end_id)
-                end_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
+            if end_point is None:
+                continue
 
-            remaining_sq = end_point.distance_squared(target)
-            dot = (b_pos.x - place.x) * ux + (b_pos.y - place.y) * uy
-            score = (-remaining_sq, dot)
+            hops     = 0
+            chain_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
+            while chain_id is not None and hops < 20:
+                et = c.get_entity_type(chain_id)
+                if et not in transport_types or c.get_team(chain_id) != c.get_team():
+                    break
+                if et == EntityType.BRIDGE:
+                    end_point = c.get_bridge_target(chain_id)
+                elif et in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                    try:
+                        end_point = end_point.add(c.get_direction(chain_id))
+                    except Exception:
+                        break
+                else:
+                    break
+                if end_point is None:
+                    break
+                chain_id = c.get_tile_building_id(end_point) if c.is_in_vision(end_point) else None
+                hops += 1
+
+            if end_point is None:
+                continue
+
+            ddx_b = b_pos.x - place.x
+            ddy_b = b_pos.y - place.y
+            remaining_sq   = end_point.distance_squared(final_target)
+            dot            = ddx_b * ux + ddy_b * uy
+            merge_bonus    = self._MERGE_BONUS if self._is_connected_to_base(c, b) else 0
+            congestion_pen = self._transport_congestion_penalty(c, b, b_pos)
+            score          = -remaining_sq + dot + merge_bonus + congestion_pen
+
             if best_score is None or score > best_score:
                 best_score = score
-                best = b_pos
+                best_pos   = b_pos
 
-        return best
+        return best_pos
