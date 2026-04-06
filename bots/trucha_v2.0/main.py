@@ -18,6 +18,7 @@ from botRolex.core import run_core
 # BUILDER BOTS
 from botRolex.builder import Harvester
 from botRolex.builderTorretas import Torreta
+from botRolex.builderAtaque import Ataque
 from botRolex.defensivo import Defensivo
 from botRolex.builderMuros import Muros
 from botRolex.healer import Healer
@@ -25,6 +26,7 @@ from botRolex.healer import Healer
 # TORRETAS
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
+from torretaRolex.gunner import run_gunner
 from torretaRolex.launcher import Launcher
 
 class Player:
@@ -57,16 +59,18 @@ class Player:
                     if ct.get_id() % 5 == 0 or ct.get_id() % 5 == 1:
                         self.brain = Healer(ct) # torreta
                     elif ct.get_id() % 5 == 2 or ct.get_id() % 5 == 3: #2 de cada 5
-                        self.brain = Muros(ct)
+                        self.brain = Ataque(ct)
                     else:
                         self.brain = Harvester(ct)
                 elif round == 1:
                     self.brain = Defensivo(ct) # defensivo
-                elif round == 2 or round == 4:
+                elif round == 2:
                     if width < 20:
-                        self.brain = Muros(ct) # defensor / ataque luego (de momento Harvester)
+                        self.brain = Ataque(ct) # ataque
                     else:
                         self.brain = Healer(ct) # normal
+                elif round == 4:
+                    self.brain = Ataque(ct) # ataque
                 elif round == 3:
                     self.brain = Harvester(ct) # torreta
                 else:
@@ -78,6 +82,8 @@ class Player:
             run_sentinel(self, ct)
         elif etype == EntityType.BREACH:
             run_breach(self, ct)
+        elif etype == EntityType.GUNNER:
+            run_gunner(self, ct)
         elif etype == EntityType.LAUNCHER:
             if self.brain is None:
                 self.brain = Launcher(ct)

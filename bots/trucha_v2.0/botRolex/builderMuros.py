@@ -332,3 +332,20 @@ class Muros:
             c.build_road(next_pos)
         if c.can_move(d):
             c.move(d)
+
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Revisar si hay bots enemigos al rededor de un bot aliado 
+    # ──────────────────────────────────────────────────────────────────────────
+    def hay_enemigo_adyacente(self, c: Controller) -> bool:
+        current = c.get_position()
+        
+        for d in _ALL_DIRS:
+            casilla_adyacente = current.add(d)
+            if _is_in_bounds(c, casilla_adyacente):
+                
+                # (Ajusta este nombre a como sea en tu API para buscar robots)
+                robot_id = c.get_tile_builder_bot_id(casilla_adyacente) 
+                
+                if robot_id is not None and c.get_team(robot_id) != c.get_team():
+                    return True # ¡Peligro, hay un enemigo pegado a nosotros!

@@ -334,7 +334,7 @@ class Harvester:
             self.mode = 3
             for d in places:
                 spot = self.current_target.add(d)
-                if _is_in_bounds and c.is_in_vision(spot):
+                if _is_in_bounds(c, spot) and c.is_in_vision(spot):
                     b_id = c.get_tile_building_id(spot)
                     if b_id is not None:
                         entity = c.get_entity_type(b_id)
