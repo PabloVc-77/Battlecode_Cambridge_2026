@@ -1,6 +1,6 @@
 from cambc import Controller, Direction, EntityType, Environment, Position
 import bignav_a_mem as bugnav
-
+from bignav_a_mem import MAP_SYM
 
 def _is_in_bounds(c: Controller, pos: Position) -> bool:
     w = c.get_map_width()
@@ -31,6 +31,7 @@ class Ataque:
         self.enemy_core_pos: Position | None = None
         self.enemy_core_candidates: list[Position] = []
         self.simetry: int = 0
+        self.has_seen_enemy_core = False
 
         self.objetivo: Position | None = None
 
@@ -86,6 +87,9 @@ class Ataque:
                     self.spawn = self.my_core
                     self._init_enemy_candidates(c.get_map_width(), c.get_map_height())
                     break
+        
+        if self.enemy_core_pos is None and MAP_SYM.confirmed():
+            self.enemy_core_pos = MAP_SYM.symmetric_pos(self.my_core, c.get_map_width(), c.get_map_height())
 
         # Limpiar objetivos bloqueados que ya han expirado
         self._refresh_blocked(c)
@@ -105,6 +109,8 @@ class Ataque:
         if self.enemy_core_pos is None:
             c.draw_indicator_dot(current, 255, 255, 0)
             self._find_enemy_core(c)
+        elif not self.has_seen_enemy_core:
+            self.go_to_enemy_core(c)
         else:
             c.draw_indicator_dot(current, 100, 100, 255)
             move_dir = self.navegador.moveExplore(c, four_dirs=False)
@@ -463,6 +469,22 @@ class Ataque:
         for b in c.get_nearby_buildings():
             if c.get_entity_type(b) == EntityType.CORE and c.get_team(b) != c.get_team():
                 self.enemy_core_pos = c.get_position(b)
+                self.has_seen_enemy_core = True
+                break
+    
+    def go_to_enemy_core(self, c: Controller):
+        current = c.get_position()
+        dir = self.navegador.moveTo(c, self.enemy_core_pos, False)
+        nextpos = current.add(dir)
+        c.draw_indicator_line(current, self.enemy_core_pos, 255, 140, 0)
+        if c.can_build_road(nextpos):
+            c.build_road(nextpos)
+        if c.can_move(dir):
+            c.move(dir)
+        
+        for b in c.get_nearby_buildings():
+            if c.get_entity_type(b) == EntityType.CORE and c.get_team(b) != c.get_team():
+                self.has_seen_enemy_core = True
                 break
 
     # ──────────────────────────────────────────────────────────────────────────

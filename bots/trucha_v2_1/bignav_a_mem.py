@@ -40,9 +40,11 @@ Si el tick ya llegó con poco presupuesto (lógica previa costosa),
 el A* simplemente no avanza ese tick y BugNav cubre el movimiento.
 """
 
-from cambc import Controller, Direction, Position, EntityType
+from cambc import Controller, Direction, Position, EntityType, Environment
 import math
 import random
+
+from map_symmetry import MapSymmetry
 
 # ---------------------------------------------------------------------------
 # Constantes
@@ -56,6 +58,13 @@ _ALL_DIRS = [
     Direction.NORTHEAST, Direction.NORTHWEST, Direction.SOUTHEAST, Direction.SOUTHWEST,
 ]
 _CARD_DIRS = [Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST]
+
+# ---------------------------------------------------------------------------
+# Instancia global de simetría — importable desde otros módulos:
+#   from bugnav import MAP_SYM
+# ---------------------------------------------------------------------------
+
+MAP_SYM = MapSymmetry()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,12 +98,21 @@ def _passable(c: Controller, pos: Position) -> bool:
 
 
 def _passable_known(c: Controller, pos: Position,
-                    map_passable: set, map_blocked: set) -> bool:
+                    map_passable: set, map_blocked: set,
+                    map_walls: set | None = None) -> bool:
     """
     Consulta el mapa persistente primero; solo llama a la API del controlador
     para tiles aún desconocidos (en visión actual).
     Devuelve True si el tile es transitable según la mejor información disponible.
+
+    map_walls (opcional): set de paredes permanentes (Environment.WALL).
+    Si se pasa, los tiles en map_walls se consideran bloqueados definitivamente
+    incluso si no están en map_blocked en este momento (p.ej. porque hay un
+    edificio encima y ya no están en visión directa).
     """
+    # Paredes permanentes: bloqueadas para siempre, sin excepción
+    if map_walls is not None and pos in map_walls:
+        return False
     if pos in map_passable:
         return True
     if pos in map_blocked:
@@ -169,7 +187,8 @@ class AStarState:
 # ---------------------------------------------------------------------------
 
 def _astar_tick(state: AStarState, c: Controller, w: int, h: int,
-                map_passable: set, map_blocked: set) -> None:
+                map_passable: set, map_blocked: set,
+                map_walls: set | None = None) -> None:
     """
     Avanza el A* mientras quede presupuesto de CPU en el tick actual.
     Comprueba c.get_cpu_time_elapsed() en cada iteración; si supera
@@ -178,6 +197,11 @@ def _astar_tick(state: AStarState, c: Controller, w: int, h: int,
 
     Usa el mapa persistente (map_passable / map_blocked) para explorar
     tiles ya conocidos aunque estén fuera de visión en este tick.
+
+    map_walls: set de paredes permanentes (Environment.WALL). Los tiles
+    en este set se tratan como bloqueados de forma definitiva, lo que
+    permite al A* planificar rutas correctas por zonas ya exploradas
+    aunque los tiles de pared hayan salido del campo de visión.
     """
     if state.done:
         return
@@ -226,7 +250,7 @@ def _astar_tick(state: AStarState, c: Controller, w: int, h: int,
                 continue
             # El goal se acepta siempre (no necesitamos "atravesarlo", solo llegar).
             # El resto de tiles requieren ser transitables según el mapa conocido.
-            if nb != goal and not _passable_known(c, nb, map_passable, map_blocked):
+            if nb != goal and not _passable_known(c, nb, map_passable, map_blocked, map_walls):
                 continue
             step = 1.414 if _is_diagonal(d) else 1.0
             ng = g + step
@@ -298,6 +322,12 @@ class BugNav:
         self._map_passable: set = set()   # tiles confirmados como transitables
         self._map_blocked:  set = set()   # tiles confirmados como bloqueados
 
+        # Paredes permanentes: subconjunto de _map_blocked con Environment.WALL
+        # Nunca se eliminan de este set porque las paredes son inmutables.
+        # El A* puede confiar en que estos tiles jamás serán transitables,
+        # lo que mejora la planificación en zonas ya exploradas.
+        self._map_walls: set = set()
+
     # -------------------------------------------------------------------------
     def _init_dims(self, c: Controller):
         if self._w == 0:
@@ -307,18 +337,39 @@ class BugNav:
     def _update_map(self, c: Controller):
         """
         Registra en el mapa persistente todos los tiles visibles este tick.
-        Separa transitables de bloqueados para que el A* pueda planificar
-        rutas completas aunque parte del camino ya no esté en visión.
-        Un tile bloqueado puede volver a ser transitable (barreras derribadas,
-        etc.), por eso se elimina de _map_blocked si ahora es pasable.
+
+        - _map_passable / _map_blocked: para el pathfinding dinámico del A*.
+        - _map_walls: subconjunto permanente de paredes (Environment.WALL).
+        - MAP_SYM: recibe el entorno de cada tile para el detector de simetría
+          (filtra EMPTY internamente; solo procesa WALL y ORE_*).
+
+        Las paredes son el único tipo de tile bloqueado que nunca cambia,
+        así que se guardan en _map_walls y se usan para reforzar _map_blocked
+        incluso si una construcción posterior "tapa" la pared en visión.
         """
+        w, h = self._w, self._h
         for pos in c.get_nearby_tiles():
+            env = c.get_tile_env(pos)
+
+            # --- Detector de simetría (terreno estático: WALL y ORE_*) ---
+            MAP_SYM.update_terrain(pos, env, w, h)
+
+            # --- Mapa dinámico para pathfinding ---
             if _passable(c, pos):
                 self._map_passable.add(pos)
                 self._map_blocked.discard(pos)
+                # Nota: las paredes nunca son pasables, así que este branch
+                # no interfiere con _map_walls
             else:
                 self._map_blocked.add(pos)
                 self._map_passable.discard(pos)
+
+                # Si el tile es una pared permanente, registrarla por separado.
+                # Esto permite al A* tratarla como bloqueada definitiva aunque
+                # en un tick futuro haya un edificio encima y el tile no esté
+                # en visión (evita que _map_blocked la pierda por discard).
+                if env == Environment.WALL:
+                    self._map_walls.add(pos)
 
     def reset(self):
         self.mode = "GOAL"
@@ -404,7 +455,7 @@ class BugNav:
             self._astar = AStarState(current, goal)
 
         if self._astar is not None and self._astar.is_active():
-            _astar_tick(self._astar, c, w, h, self._map_passable, self._map_blocked)
+            _astar_tick(self._astar, c, w, h, self._map_passable, self._map_blocked, self._map_walls)
             if self._astar.done:
                 if self._astar.path:
                     self._path = self._trim_path(current, self._astar.path)
