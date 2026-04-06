@@ -15,6 +15,11 @@ _ALL_DIRS = (
     Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST,
 )
 
+# Turnos consecutivos atacando sin progreso antes de marcar como bloqueado
+_STALL_THRESHOLD = 8
+# Turnos que un objetivo permanece bloqueado antes de reintentarse
+_BLOCK_COOLDOWN = 50
+
 
 class Ataque:
     def __init__(self, ct: Controller):
@@ -36,6 +41,14 @@ class Ataque:
         # True cuando el objetivo es un destino libre de puente/conveyor enemigo:
         # no hay que destruir nada, ir directo a construir la torreta.
         self.objetivo_es_destino_libre: bool = False
+
+        # ── Detección de estancamiento ────────────────────────────────────────
+        self._stall_objetivo: Position | None = None  # objetivo que estamos vigilando
+        self._stall_turns: int = 0                    # turnos consecutivos sin progreso
+        self._last_objetivo_hp: int | None = None     # HP del edificio en objetivo el tick anterior
+
+        # {pos: round_blocked} — objetivos temporalmente descartados
+        self._blocked_objectives: dict[Position, int] = {}
 
         builds = ct.get_nearby_buildings()
         for b in builds:
@@ -74,6 +87,12 @@ class Ataque:
                     self._init_enemy_candidates(c.get_map_width(), c.get_map_height())
                     break
 
+        # Limpiar objetivos bloqueados que ya han expirado
+        self._refresh_blocked(c)
+
+        # Detectar estancamiento sobre el objetivo actual
+        self._check_stall(c)
+
         # Escanear — respeta pendiente_torreta
         self._scan_enemies(c)
 
@@ -94,6 +113,92 @@ class Ataque:
                 c.build_road(move_pos)
             if c.can_move(move_dir):
                 c.move(move_dir)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Gestión de objetivos bloqueados
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _refresh_blocked(self, c: Controller):
+        """Elimina del diccionario los objetivos cuyo cooldown ya expiró."""
+        current_round = c.get_current_round()
+        expired = [pos for pos, blocked_round in self._blocked_objectives.items()
+                   if current_round - blocked_round >= _BLOCK_COOLDOWN]
+        for pos in expired:
+            del self._blocked_objectives[pos]
+
+    def _is_blocked(self, pos: Position) -> bool:
+        return pos in self._blocked_objectives
+
+    def _block_objetivo(self, c: Controller):
+        """Marca el objetivo actual como bloqueado y lo descarta."""
+        if self.objetivo is not None:
+            self._blocked_objectives[self.objetivo] = c.get_current_round()
+        self.objetivo = None
+        self.pendiente_torreta = False
+        self.objetivo_es_destino_libre = False
+        self._stall_turns = 0
+        self._last_objetivo_hp = None
+        self._stall_objetivo = None
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Detección de estancamiento
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _check_stall(self, c: Controller):
+        """
+        Comprueba si llevamos demasiados turnos sin progresar en el objetivo actual.
+        Solo cuenta cuando estamos cerca (dist² <= 2) y hay un edificio enemigo.
+        Si el HP no baja en _STALL_THRESHOLD turnos consecutivos, bloqueamos el objetivo.
+        """
+        if self.objetivo is None or self.pendiente_torreta:
+            # No estamos atacando un edificio enemigo: resetear contadores
+            self._stall_turns = 0
+            self._last_objetivo_hp = None
+            self._stall_objetivo = None
+            return
+
+        target = self.objetivo
+
+        # Si cambió el objetivo, resetear
+        if self._stall_objetivo != target:
+            self._stall_objetivo = target
+            self._stall_turns = 0
+            self._last_objetivo_hp = None
+
+        if not c.is_in_vision(target):
+            return
+
+        bid = c.get_tile_building_id(target)
+        if bid is None or c.get_team(bid) == c.get_team():
+            # El edificio ya no existe o es nuestro: sin estancamiento
+            self._stall_turns = 0
+            self._last_objetivo_hp = None
+            return
+
+        current = c.get_position()
+        dist = current.distance_squared(target)
+
+        # Solo contamos estancamiento cuando estamos encima o adyacentes y activos
+        if dist > 2:
+            self._stall_turns = 0
+            self._last_objetivo_hp = None
+            return
+
+        current_hp = c.get_hp(bid)
+
+        if self._last_objetivo_hp is not None:
+            if current_hp >= self._last_objetivo_hp:
+                # HP igual o mayor: sin progreso (curación enemiga)
+                self._stall_turns += 1
+            else:
+                # HP bajó: progresamos
+                self._stall_turns = 0
+
+        self._last_objetivo_hp = current_hp
+
+        if self._stall_turns >= _STALL_THRESHOLD:
+            c.draw_indicator_dot(current, 255, 0, 255)  # magenta = estancado, bloqueando
+            self._block_objetivo(c)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Lógica de "final de línea"
@@ -128,28 +233,23 @@ class Ataque:
         if dest is None or not _is_in_bounds(c, dest):
             return None
 
-        # Para saber qué hay en dest necesitamos tenerlo en visión
         if not c.is_in_vision(dest):
             return None
 
         dest_bid = c.get_tile_building_id(dest)
 
         if dest_bid is None:
-            # Casilla vacía → destino libre
             return (dest, True)
 
         dest_etype = c.get_entity_type(dest_bid)
         dest_team = c.get_team(dest_bid)
 
-        # Core enemigo → atacar la propia estructura
         if dest_etype == EntityType.CORE and dest_team != c.get_team():
             return (building_pos, False)
 
-        # Torreta enemiga → atacar la propia estructura
         if dest_etype in _TURRET_TYPES and dest_team != c.get_team():
             return (building_pos, False)
 
-        # Road (cualquier equipo) → destino libre
         if dest_etype == EntityType.ROAD:
             return (dest, True)
 
@@ -167,32 +267,24 @@ class Ataque:
             if c.is_in_vision(self.objetivo):
                 bid = c.get_tile_building_id(self.objetivo)
                 if self.pendiente_torreta or self.objetivo_es_destino_libre:
-                    # Estamos colocando torreta: solo limpiar si ya está puesta
                     if bid is not None and c.get_team(bid) == c.get_team() \
                             and c.get_entity_type(bid) in _TURRET_TYPES:
                         self.objetivo = None
                         self.pendiente_torreta = False
                         self.objetivo_es_destino_libre = False
-                    elif self.hay_enemigo_adyacente(c):
-                        # Si hay un enemigo pegado al objetivo, cancelar y buscar otro
-                        self.objetivo = None
-                        self.pendiente_torreta = False
-                        self.objetivo_es_destino_libre = False
                     elif self.objetivo_es_destino_libre and bid is not None \
                             and c.get_team(bid) != c.get_team():
-                        # El enemigo puso algo en la casilla destino libre: buscar nuevo
                         self.objetivo = None
                         self.objetivo_es_destino_libre = False
-                    return  # no buscar nuevo objetivo mientras hay trabajo pendiente
+                    return
                 else:
                     if bid is None or c.get_team(bid) == c.get_team():
                         self.objetivo = None
                         self.objetivo_es_destino_libre = False
-            # Si no está en visión, mantener y acercarse
 
         # ── Recopilar candidatos de "final de línea" en visión ────────────────
-        candidates_libres: list[tuple[Position, float]] = []   # destinos libres
-        candidates_destruir: list[tuple[Position, float]] = [] # estructuras a destruir
+        candidates_libres: list[tuple[Position, float]] = []
+        candidates_destruir: list[tuple[Position, float]] = []
 
         _ENDPOINT_TYPES = (
             EntityType.CONVEYOR,
@@ -205,15 +297,17 @@ class Ataque:
                 continue
             if c.get_entity_type(bid) not in _ENDPOINT_TYPES:
                 continue
-            
-            if self.hay_enemigo_adyacente(c):
-                continue
 
             result = self._get_endpoint_info(c, bid)
             if result is None:
                 continue
 
             obj_pos, es_libre = result
+
+            # Excluir objetivos bloqueados temporalmente
+            if self._is_blocked(obj_pos):
+                continue
+
             dist = current.distance_squared(obj_pos)
             if es_libre:
                 candidates_libres.append((obj_pos, dist))
@@ -235,7 +329,6 @@ class Ataque:
                 self.pendiente_torreta = True
             return
 
-        # Si teníamos objetivo de destino libre pero ya no hay ninguno, limpiar
         if self.objetivo_es_destino_libre:
             self.objetivo = None
             self.objetivo_es_destino_libre = False
@@ -243,7 +336,6 @@ class Ataque:
 
         # ── Prioridad 2: estructuras a destruir (+ torreta encima) ────────────
         if self.objetivo is not None:
-            # Ya tenemos objetivo: cambiar solo si hay uno más cercano
             if candidates_destruir:
                 best_pos, best_dist = min(candidates_destruir, key=lambda t: t[1])
                 if best_dist < current.distance_squared(self.objetivo):
@@ -251,7 +343,6 @@ class Ataque:
                     self.pendiente_torreta = False
             return
 
-        # Sin objetivo: tomar el más cercano
         if candidates_destruir:
             best_pos, _ = min(candidates_destruir, key=lambda t: t[1])
             self.objetivo = best_pos
@@ -266,14 +357,12 @@ class Ataque:
         current = c.get_position()
         target = self.objetivo
 
-        # ── Acercarse si no está en visión ────────────────────────────────────
         if not c.is_in_vision(target):
             self._navigate_to(c, target)
             return
 
         bid = c.get_tile_building_id(target)
 
-        # ── Casilla ya tiene nuestra torreta: completado ───────────────────────
         if bid is not None and c.get_team(bid) == c.get_team() \
                 and c.get_entity_type(bid) in _TURRET_TYPES:
             self.objetivo = None
@@ -281,63 +370,57 @@ class Ataque:
             self.objetivo_es_destino_libre = False
             return
 
-        # ── Casilla libre o recién vaciada: colocar torreta ───────────────────
         if bid is None or (bid is not None and c.get_team(bid) == c.get_team()
                            and c.get_entity_type(bid) not in _TURRET_TYPES):
-            # Si hay un edificio aliado que no es torreta (road, etc.), destruirlo
             if bid is not None and c.get_team(bid) == c.get_team():
                 if c.can_destroy(target):
                     c.destroy(target)
-                return  # siguiente tick: casilla libre
+                return
 
-            # Casilla vacía: activar pendiente si no estaba
             self.pendiente_torreta = True
 
-            # Salir de encima si estamos sobre el target
             if current == target:
                 for d in _ALL_DIRS:
                     adj = target.add(d)
                     if _is_in_bounds(c, adj) and c.can_move(d):
                         c.move(d)
                         return
-                return  # bloqueado: esperar
+                return
 
-            # Acercarse si estamos lejos
             dist_sq = current.distance_squared(target)
             if dist_sq > 2:
                 self._navigate_to(c, target)
                 return
 
-            # En rango (dist² <= 2) y no encima: construir gunner
-            if c.can_build_gunner(target, Direction.NORTH):
-                # Orientar el gunner hacia el core enemigo si lo conocemos
-                if self.enemy_core_pos is not None:
-                    dir_to_enemy = target.direction_to(self.enemy_core_pos)
-                else:
-                    dir_to_enemy = Direction.NORTH
-                if c.can_build_gunner(target, dir_to_enemy):
-                    c.build_gunner(target, dir_to_enemy)
-                else:
-                    # Probar todas las direcciones
-                    for d in _ALL_DIRS:
-                        if c.can_build_gunner(target, d):
-                            c.build_gunner(target, d)
-                            break
+            if self.enemy_core_pos is not None:
+                dir_to_enemy = target.direction_to(self.enemy_core_pos)
+            else:
+                dir_to_enemy = Direction.NORTH
+
+            built = False
+            if c.can_build_gunner(target, dir_to_enemy):
+                c.build_gunner(target, dir_to_enemy)
+                built = True
+            else:
+                for d in _ALL_DIRS:
+                    if c.can_build_gunner(target, d):
+                        c.build_gunner(target, d)
+                        built = True
+                        break
+
+            if built:
                 self.objetivo = None
                 self.pendiente_torreta = False
                 self.objetivo_es_destino_libre = False
             return
 
-        # ── Hay edificio enemigo ───────────────────────────────────────────────
         if current == target:
             if c.can_fire(target):
                 c.fire(target)
-            # Si lo destruimos en este tick, marcar pendiente
             if c.get_tile_building_id(target) is None:
                 self.pendiente_torreta = True
             return
 
-        # Movernos encima si es pisable; si no, acercarnos
         moved = False
         if c.is_tile_passable(target):
             dir = self.navegador.moveTo(c, target, four_dirs=False)
@@ -351,7 +434,6 @@ class Ataque:
             if current.distance_squared(target) > 2:
                 self._navigate_to(c, target)
 
-        # Si llegamos encima, atacar en el mismo turno
         if moved and c.get_position() == target:
             if c.can_fire(target):
                 c.fire(target)
@@ -397,16 +479,19 @@ class Ataque:
             c.move(d)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Revisar si hay bots enemigos al rededor de un bot aliado 
+    # Revisar si hay bots enemigos al rededor de un bot aliado
     # ──────────────────────────────────────────────────────────────────────────
+
     def hay_enemigo_adyacente(self, c: Controller) -> bool:
         current = c.get_position()
-        
+
         for d in _ALL_DIRS:
             casilla_adyacente = current.add(d)
             if _is_in_bounds(c, casilla_adyacente) and c.is_in_vision(casilla_adyacente):
                 bot = c.get_tile_building_id(casilla_adyacente)
-                hay_bot = (c.get_entity_type(bot) == EntityType.BUILDER_BOT and c.get_team(bot) != c.get_team())
-                if hay_bot:
-                    return True
+                if bot is not None:
+                    hay_bot = (c.get_entity_type(bot) == EntityType.BUILDER_BOT
+                               and c.get_team(bot) != c.get_team())
+                    if hay_bot:
+                        return True
         return False
