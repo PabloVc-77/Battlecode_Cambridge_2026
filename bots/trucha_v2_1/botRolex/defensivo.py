@@ -93,9 +93,11 @@ class Defensivo:
             return
 
         
-        nodePosition = c.get_position(self.my_core)
-        if(c.get_hp(self.my_core) < c.get_max_hp(self.my_core) and c.can_heal(nodePosition)):
-            c.heal(nodePosition)
+        nodePosition = self.spawn
+        if c.is_in_vision(nodePosition):
+            
+            if(c.get_hp(self.my_core) < c.get_max_hp(self.my_core) and c.can_heal(nodePosition)):
+                c.heal(nodePosition)
         
         current = c.get_position()
         
@@ -165,10 +167,6 @@ class Defensivo:
                                 continue
                             
                             casillas_validas.append(pos)
-                        elif self.furnace_pos is not None and c.is_in_vision(self.furnace_pos) and furnace is not None and c.get_entity_type(furnace) == EntityType.FOUNDRY and c.get_entity_type(something) in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
-                            dir_conv = c.get_direction(something)
-                            if not _is_diagonal(dir_conv) and dir_conv != pos.direction_to(self.furnace_pos):
-                                casillas_validas.append(pos)
 
         casillas_validas.sort(key=lambda p: centro.distance_squared(p))
 
