@@ -64,14 +64,14 @@ class Player:
                         self.brain = Harvester(ct)
                 elif round == 1:
                     self.brain = Defensivo(ct) # defensivo
-                elif round == 2:
+                elif round == 3:
                     if width < 20:
                         self.brain = Ataque(ct) # ataque
                     else:
                         self.brain = Healer(ct) # normal
                 elif round == 4:
                     self.brain = Ataque(ct) # ataque
-                elif round == 3:
+                elif round == 2:
                     self.brain = Harvester(ct) # torreta
                 else:
                     self.brain = Harvester(ct) # normal
