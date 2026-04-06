@@ -27,10 +27,15 @@ def run_gunner(self, c: Controller):
 
         if tipo == EntityType.CORE:
             adjacentes = [
+                pos,
                 pos.add(Direction.NORTH),
                 pos.add(Direction.SOUTH),
                 pos.add(Direction.WEST),
                 pos.add(Direction.EAST),
+                pos.add(Direction.NORTHEAST),
+                pos.add(Direction.NORTHWEST),
+                pos.add(Direction.SOUTHEAST),
+                pos.add(Direction.SOUTHWEST)
             ]
             adjacentes.sort(key=lambda p: (
                 (p.x - c.get_position().x) ** 2 + (p.y - c.get_position().y) ** 2
@@ -42,7 +47,7 @@ def run_gunner(self, c: Controller):
             # Si ninguna adyacente es alcanzable, intentar el centro
             if c.can_fire(pos):
                 c.fire(pos)
-            return
+                return
 
         if c.can_fire(pos):
             c.fire(pos)
