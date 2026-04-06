@@ -72,9 +72,13 @@ def _is_conv_better(c: Controller, ini: Position, end: Position):
                 elif not c.is_tile_passable(neighbor) and (entity != EntityType.BARRIER or c.get_team() != c.get_team(building_id)):
                     if neighbor != c.get_position():
                         continue
-                elif entity in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.BRIDGE, EntityType.SPLITTER) and c.get_team() == c.get_team(building_id):
+                elif entity in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.BRIDGE) and c.get_team() == c.get_team(building_id):
                     # Permitir si es el destino final, saltar si es nodo intermedio
                     if neighbor != end:
+                        continue
+                elif entity == EntityType.SPLITTER and c.get_team() == c.get_team(building_id):
+                     # Permitir si es el destino final, saltar si es nodo intermedio
+                    if neighbor != end or d != c.get_direction(building_id):
                         continue
 
             new_path = path + [(current, d)]
@@ -114,6 +118,7 @@ class Harvester:
             # mode 2: go home (Rojo)
             # mode 3: revisar estructura (Naranja)
             # mode 4: conveyor mode (Azul Oscuro)
+            # mode 5: gunner junto con conveyors (Rosa)
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
         self.check_pos = None
@@ -124,6 +129,15 @@ class Harvester:
 
         self.recolectores = []
         self.turret_places = []
+
+        # Mode 5 state
+        self.mode5_splitter_pos: Position | None = None   # dónde poner el splitter
+        self.mode5_splitter_dir: Direction | None = None  # dirección del splitter (=conv_dir)
+        self.mode5_gunner_pos: Position | None = None     # dónde poner el gunner
+        self.mode5_gunner_dir: Direction | None = None    # dirección del gunner
+        self.mode5_origin_path: list = []                 # conveyor_path guardado para retomar
+        self.mode5_done_splitter: bool = False            # splitter ya colocado
+        self.last_conveyor_dir: Direction | None = None   # dirección del último conveyor colocado en modo 4
 
         # Cache de IDs de puentes verificados como conectados a la base en este turno
         self._connected_cache: dict[int, bool] = {}
@@ -195,6 +209,10 @@ class Harvester:
             c.draw_indicator_dot(current, 26, 42, 219)
             self.place_conveyors(c)
             return
+        elif self.mode == 5:
+            c.draw_indicator_dot(current, 245, 39, 211)
+            self.place_gunner_splitter(c)
+            return
 
 
         
@@ -223,6 +241,17 @@ class Harvester:
                                 self.recolectores.remove(tile)
                                 self.recolectores_set.discard(tile)
                         continue
+                    elif c.get_entity_type(building_id) == EntityType.MARKER and c.get_team() == c.get_team(building_id):
+                        value = c.get_marker_value(building_id)
+                        if value != c.get_id():
+                            if tile in self.recolectores_set:
+                                self.recolectores.remove(tile)
+                                self.recolectores_set.discard(tile)
+                            if tile in self.objetivos_set:
+                                self.objetivos.remove(tile)
+                                self.objetivos_set.discard(tile)
+                                changed = True
+                            continue
                     else:
                         if not (c.is_tile_passable(tile) or (c.get_entity_type(building_id) == EntityType.BARRIER and c.get_team() == c.get_team(building_id))):
                             if tile in self.recolectores_set:
@@ -262,9 +291,9 @@ class Harvester:
                     c.fire(current)
                 return
 
-        if len(self.objetivos) > 0:
+        if len(self.objetivos) > 0 and self.current_target is None:
             target = self.objetivos[0]
-        elif len(self.recolectores) > 0:
+        elif len(self.recolectores) > 0 and self.current_target is None:
             target = self.recolectores[0]
         else:
             target = None
@@ -279,6 +308,10 @@ class Harvester:
                 build_id = c.get_tile_building_id(target)
                 if (build_id is not None and c.get_entity_type(build_id) != EntityType.HARVESTER) and not self._clear_tile(c, target):
                     return  # Aún no lo hemos roto
+                
+            if c.can_place_marker(target):
+                c.place_marker(target, c.get_id())
+                self.current_target = target
 
             if c.can_build_harvester(target):
                 c.build_harvester(target)
@@ -373,6 +406,7 @@ class Harvester:
         c.draw_indicator_dot(place, 0, 0, 0)
 
         if place in self.end_bridges:
+            self.current_target = None
             self.mode = 0
             return
 
@@ -406,6 +440,7 @@ class Harvester:
             end = target_end
             if target_end is None:
                 self.mode = 0
+                self.current_target = None
                 return
 
             # Comprobar si conveyors son más baratas que un puente
@@ -417,10 +452,12 @@ class Harvester:
                     c.build_armoured_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop(0)
                     self.last_bridge_end = conv_pos.add(conv_dir)
+                    self.last_conveyor_dir = conv_dir
                 elif c.can_build_conveyor(conv_pos, conv_dir):
                     c.build_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop(0)
                     self.last_bridge_end = conv_pos.add(conv_dir)
+                    self.last_conveyor_dir = conv_dir
                 self.mode = 4
                 return
 
@@ -444,6 +481,7 @@ class Harvester:
             self.bridge_origin = None
 
             if end in self.end_bridges:
+                self.current_target = None
                 self.mode = 0
                 self.last_bridge_end = None
             elif (c.is_in_vision(end)
@@ -463,6 +501,7 @@ class Harvester:
         if bridge_end is not None and bridge_end in self.end_bridges:
             self.mode = 0
             self.last_bridge_end = None
+            self.current_target = None
             return
 
         # Moverse hasta anchor
@@ -501,10 +540,12 @@ class Harvester:
                     c.build_armoured_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop(0)
                     self.last_bridge_end = conv_pos.add(conv_dir)
+                    self.last_conveyor_dir = conv_dir
                 elif c.can_build_conveyor(conv_pos, conv_dir):
                     c.build_conveyor(conv_pos, conv_dir)
                     self.conveyor_path.pop(0)
                     self.last_bridge_end = conv_pos.add(conv_dir)
+                    self.last_conveyor_dir = conv_dir
                 self.mode = 4
                 return
             end = target_end
@@ -533,6 +574,7 @@ class Harvester:
             if end in self.end_bridges:
                 self.mode = 0
                 self.last_bridge_end = None
+                self.current_target = None
             elif (c.is_in_vision(end)
                   and c.get_tile_building_id(end) is not None
                   and c.get_entity_type(c.get_tile_building_id(end)) in (EntityType.BRIDGE, EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR)
@@ -551,12 +593,14 @@ class Harvester:
 
         if self.check_pos is None: # No debería pasar?
             self.mode = 0
+            self.current_target = None
             return
 
         if self.check_pos in self.end_bridges:
             self.mode = 0
             self.check_pos = None
             self.last_bridge_end = None
+            self.current_target = None
             return
 
         c.draw_indicator_dot(self.check_pos, 255, 128, 0) # Naranja
@@ -597,6 +641,7 @@ class Harvester:
             self.mode = 0
             self.check_pos = None
             self.last_bridge_end = None
+            self.current_target = None
             return
 
         if next_check is None:
@@ -645,6 +690,7 @@ class Harvester:
                 if (entity in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR)
                         and team == c.get_team()
                         and c.get_direction(build_id) == conv_dir):
+                    self.last_conveyor_dir = conv_dir
                     self.conveyor_path.pop(0)
                     end = conv_pos.add(conv_dir)
                     self._check_conveyor_chain_end(c, end)
@@ -673,6 +719,56 @@ class Harvester:
                 if not self._clear_tile(c, conv_pos):
                     return
 
+        # ── Comprobar si debemos colocar un gunner lateral (modo 5) ─────────────
+        # Solo si no hay ningún GUNNER aliado visible en radio² 13
+        gunner_nearby = any(
+            c.get_entity_type(bid) == EntityType.GUNNER and c.get_team(bid) == c.get_team()
+            for bid in c.get_nearby_buildings()
+        )
+        if not gunner_nearby and self.last_conveyor_dir is not None:
+            result = self._find_gunner_spot(c, conv_pos, conv_dir)
+            if result is not None:
+                g_pos, g_dir, needs_splitter = result
+                
+                # Si no hay splitter, el conveyor en conv_pos sigue siendo necesario.
+                # Construirlo ahora antes de saltar al modo 5.
+                if not needs_splitter:
+                    built = False
+                    if c.can_build_armoured_conveyor(conv_pos, conv_dir):
+                        c.build_armoured_conveyor(conv_pos, conv_dir)
+                        built = True
+                    elif c.can_build_conveyor(conv_pos, conv_dir):
+                        c.build_conveyor(conv_pos, conv_dir)
+                        built = True
+                    if not built:
+                        # No podemos construirlo aún, no saltar al modo 5 todavía
+                        # El flujo normal del modo 4 lo reintentará el turno siguiente
+                        pass  # ← caer al bloque de construcción normal abajo
+                    else:
+                        self.last_conveyor_dir = conv_dir
+                        self.conveyor_path.pop(0)
+                        self.last_bridge_end = conv_pos.add(conv_dir)
+                        # Ahora sí saltar al modo 5 solo para el gunner
+                        self.mode5_splitter_pos  = None
+                        self.mode5_splitter_dir  = None
+                        self.mode5_gunner_pos    = g_pos
+                        self.mode5_gunner_dir    = g_dir
+                        self.mode5_origin_path   = self.conveyor_path[:]  # path ya actualizado
+                        self.conveyor_path       = []
+                        self.mode5_done_splitter = True
+                        self.mode = 5
+                        return
+                else:
+                    self.mode5_splitter_pos  = conv_pos
+                    self.mode5_splitter_dir  = self.last_conveyor_dir
+                    self.mode5_gunner_pos    = g_pos
+                    self.mode5_gunner_dir    = g_dir
+                    self.mode5_origin_path   = self.conveyor_path[1:]
+                    self.conveyor_path       = []
+                    self.mode5_done_splitter = False
+                    self.mode = 5
+                    return
+
         # ── Construir el conveyor (preferir armoured si hay recursos) ────────────
         built = False
         if c.can_build_armoured_conveyor(conv_pos, conv_dir):
@@ -683,6 +779,7 @@ class Harvester:
             built = True
 
         if built:
+            self.last_conveyor_dir = conv_dir
             self.conveyor_path.pop(0)
             end = conv_pos.add(conv_dir)
             self.last_bridge_end = end
@@ -697,9 +794,12 @@ class Harvester:
             self.conveyor_path = []
             self.mode = 0
             self.last_bridge_end = None
+            self.current_target = None
+            self.last_conveyor_dir = None
             return
 
         if not self.conveyor_path:
+            self.last_conveyor_dir = None
             if c.is_in_vision(end):
                 end_bid = c.get_tile_building_id(end)
                 if (end_bid is not None
@@ -711,6 +811,108 @@ class Harvester:
                     self.mode = 3
                     return
             self.mode = 2
+
+    # MODE 5
+
+    def place_gunner_splitter(self, c: Controller):
+        """
+        Coloca un splitter (en mode5_splitter_pos, dir mode5_splitter_dir) y
+        un gunner (en mode5_gunner_pos, dir mode5_gunner_dir).
+        Al terminar ambas construcciones, retoma el modo 4 con el path guardado.
+        """
+        current = c.get_position()
+
+        # ── Paso 1: colocar el splitter ─────────────────────────────────────────
+        if not self.mode5_done_splitter:
+            sp = self.mode5_splitter_pos
+            sd = self.mode5_splitter_dir
+
+            c.draw_indicator_dot(sp, 255, 100, 0)
+
+            # Acercarse si es necesario
+            if current.distance_squared(sp) > 2:
+                dir = self.navegador.moveTo(c, sp, four_dirs=False)
+                next_pos = current.add(dir)
+                if c.can_build_road(next_pos):
+                    c.build_road(next_pos)
+                self._try_move(c, dir)
+                return
+
+            # Limpiar si hay algo en la casilla
+            if c.is_in_vision(sp):
+                bid = c.get_tile_building_id(sp)
+                if bid is not None:
+                    et = c.get_entity_type(bid)
+                    tm = c.get_team(bid)
+                    # Si ya hay un splitter aliado con la misma dirección: saltar directamente
+                    if et == EntityType.SPLITTER and tm == c.get_team() and c.get_direction(bid) == sd:
+                        self.mode5_done_splitter = True
+                    else:
+                        if not self._clear_tile(c, sp):
+                            return
+
+            if c.can_build_splitter(sp, sd):
+                c.build_splitter(sp, sd)
+                self.mode5_done_splitter = True
+                # Actualizar last_bridge_end al output del splitter
+                self.last_bridge_end = sp.add(sd)
+            else:
+                # No podemos aún (recursos, cooldown): esperar
+                return
+
+        # ── Paso 2: colocar el gunner ────────────────────────────────────────────
+        gp = self.mode5_gunner_pos
+        gd = self.mode5_gunner_dir
+
+        c.draw_indicator_dot(gp, 255, 50, 200)  # Rosa
+
+        # Si estamos encima de la casilla del gunner, apartarse primero
+        if current == gp:
+            for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
+                adj = gp.add(d)
+                if self._in_bounds(adj) and c.can_move(d):
+                    c.move(d)
+                    break
+            return  # esperar al turno siguiente para construir
+
+        # Acercarse si es necesario
+        if current.distance_squared(gp) > 2:
+            dir = self.navegador.moveTo(c, gp, four_dirs=False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            self._try_move(c, dir)
+            return
+
+        # Limpiar si hay algo en la casilla
+        if c.is_in_vision(gp):
+            bid = c.get_tile_building_id(gp)
+            if bid is not None:
+                et = c.get_entity_type(bid)
+                tm = c.get_team(bid)
+                # Si ya hay un gunner aliado: listo
+                if et == EntityType.GUNNER and tm == c.get_team():
+                    self._finish_mode5(c)
+                    return
+                if not self._clear_tile(c, gp):
+                    return
+
+        if c.can_build_gunner(gp, gd):
+            c.build_gunner(gp, gd)
+            self._finish_mode5(c)
+        # Si no podemos aún, esperamos al próximo turno
+
+    def _finish_mode5(self, c: Controller):
+        """Limpia el estado del modo 5 y retoma modo 4 con el path guardado."""
+        self.conveyor_path = self.mode5_origin_path
+        self.mode5_origin_path = []
+        self.mode5_splitter_pos = None
+        self.mode5_splitter_dir = None
+        self.mode5_gunner_pos = None
+        self.mode5_gunner_dir = None
+        self.mode5_done_splitter = False
+        self.last_conveyor_dir   = None
+        self.mode = 4
 
     # UTILITY
 
@@ -858,6 +1060,124 @@ class Harvester:
                         c.build_road(next_pos)
                     self._try_move(c, dir)
                 return False
+            
+    def _find_gunner_spot(
+        self,
+        c: Controller,
+        conv_pos: Position,
+        conv_dir: Direction,
+    ) -> tuple["Position", "Direction", bool] | None:
+        """
+        Busca la mejor casilla adyacente cardinal de conv_pos para colocar un gunner.
+
+        Scoring (mayor = mejor):
+        +1000 si tiene un harvester aliado adyacente (N/S/E/O) → no necesita splitter
+        -min_dist_sq_a_ore_sin_harvester  (más lejos de ores libres = mejor)
+
+        Devuelve (spot, gunner_dir, needs_splitter) o None si no hay candidatos.
+        needs_splitter=False cuando el spot tiene harvester adyacente.
+        """
+        cardinals = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
+
+        future_path_positions: set[Position] = set()
+        for fp, fd in self.conveyor_path:
+            future_path_positions.add(fp)
+            future_path_positions.add(fp.add(fd))
+
+        transport_types = (
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.BRIDGE,
+            EntityType.SPLITTER,
+        )
+
+        ore_envs = (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE)
+
+        # Recopilar todos los candidatos válidos con su score
+        candidates: list[tuple[float, Position, Direction, bool]] = []
+
+        for d in cardinals:
+            spot = conv_pos.add(d)
+
+            if not self._in_bounds(spot):
+                continue
+            if not c.is_in_vision(spot):
+                continue
+            if spot in self.end_bridges:
+                continue
+            if spot in future_path_positions:
+                continue
+            if c.get_tile_env(spot) in (Environment.WALL, Environment.ORE_AXIONITE, Environment.ORE_TITANIUM):
+                continue
+
+            bid = c.get_tile_building_id(spot)
+            if bid is not None:
+                et   = c.get_entity_type(bid)
+                team = c.get_team(bid)
+                if et == EntityType.CORE:
+                    continue
+                if team == c.get_team() and et in transport_types:
+                    continue
+                if team == c.get_team():
+                    if et not in (EntityType.ROAD, EntityType.BARRIER):
+                        continue
+                else:
+                    if not c.is_tile_passable(spot):
+                        continue
+
+            # Dirección del gunner: conv_dir primero
+            preferred_dirs = [conv_dir, conv_dir.opposite()]
+            for pd in cardinals:
+                if pd not in preferred_dirs:
+                    preferred_dirs.append(pd)
+            gunner_dir = preferred_dirs[0]
+
+            # ── Scoring ─────────────────────────────────────────────────────────
+
+            # ¿Tiene harvester aliado adyacente?
+            has_adjacent_harvester = False
+            for cd in cardinals:
+                nb = spot.add(cd)
+                if not self._in_bounds(nb):
+                    continue
+                nb_bid = c.get_tile_building_id(nb)
+                if (nb_bid is not None
+                        and c.get_entity_type(nb_bid) == EntityType.HARVESTER
+                        and c.get_team(nb_bid) == c.get_team()):
+                    has_adjacent_harvester = True
+                    break
+
+            if has_adjacent_harvester:
+                score = 1000.0
+                needs_splitter = False
+            else:
+                # Distancia mínima a ores sin harvester visibles
+                min_ore_dist_sq = float("inf")
+                for tile in c.get_nearby_tiles():
+                    env = c.get_tile_env(tile)
+                    if env not in ore_envs:
+                        continue
+                    # ¿Tiene harvester?
+                    tile_bid = c.get_tile_building_id(tile)
+                    if (tile_bid is not None
+                            and c.get_entity_type(tile_bid) == EntityType.HARVESTER):
+                        continue
+                    dist_sq = spot.distance_squared(tile)
+                    if dist_sq < min_ore_dist_sq:
+                        min_ore_dist_sq = dist_sq
+
+                score = -min_ore_dist_sq if min_ore_dist_sq != float("inf") else 0.0
+                needs_splitter = True
+
+            candidates.append((score, spot, gunner_dir, needs_splitter))
+
+        if not candidates:
+            return None
+
+        # Mejor candidato: mayor score; desempate por orden de iteración (estable)
+        candidates.sort(key=lambda x: -x[0])
+        _, best_spot, best_dir, best_needs_splitter = candidates[0]
+        return (best_spot, best_dir, best_needs_splitter)
     
    # ── SCORING CONSTANTS ────────────────────────────────────────────────────────
     # Ajusta estos valores para calibrar el comportamiento sin tocar la lógica.
