@@ -1,5 +1,5 @@
 from cambc import Controller, Direction, EntityType, Environment, Position
-import bignav_opus as bugnav
+import bots.Sprint_3.bot_defensivo_nueva_strat.bignav_opus as bugnav
 
 # ---------------------------------------------------------------------------
 # Helpers
