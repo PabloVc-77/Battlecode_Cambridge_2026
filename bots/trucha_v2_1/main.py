@@ -17,12 +17,16 @@ from botRolex.core import run_core
 
 # BUILDER BOTS
 from botRolex.builder import Harvester
-from botRolex.builderTorretas2 import Torreta
+from botRolex.builderTorretas import Torreta
+from botRolex.builderAtaque import Ataque
 from botRolex.defensivo import Defensivo
+from botRolex.builderMuros import Muros
+from botRolex.healer import Healer
 
 # TORRETAS
 from torretaRolex.sentinel import run_sentinel
 from torretaRolex.breach import run_breach
+from torretaRolex.gunner import run_gunner
 from torretaRolex.launcher import Launcher
 
 class Player:
@@ -36,16 +40,39 @@ class Player:
 
 
     def run(self, ct: Controller) -> None:
+        width = ct.get_map_width()
+
         etype = ct.get_entity_type()
         if etype == EntityType.CORE:
             run_core(self, ct)
         elif etype == EntityType.BUILDER_BOT:
             if(self.brain is None): # primera ronda de su vida
+                #si hay bot enemigo cerca, pasar a healer
+                entities = ct.get_nearby_entities()
+                for e in entities:
+                    if ct.get_entity_type(e) == EntityType.BUILDER_BOT and ct.get_team(e) != ct.get_team():
+                        self.brain = Healer(ct)
+                        break
+
                 round = ct.get_current_round()
-                if round > 50 and ct.get_id() % 3 != 0:
-                   self.brain = Torreta(ct) # torreta
+                if round > 50:
+                    if ct.get_id() % 5 == 0 or ct.get_id() % 5 == 1:
+                        self.brain = Healer(ct) # torreta
+                    elif ct.get_id() % 5 == 2 or ct.get_id() % 5 == 3: #2 de cada 5
+                        self.brain = Ataque(ct)
+                    else:
+                        self.brain = Harvester(ct)
                 elif round == 1:
                     self.brain = Defensivo(ct) # defensivo
+                elif round == 2:
+                    if width < 20:
+                        self.brain = Ataque(ct) # ataque
+                    else:
+                        self.brain = Healer(ct) # normal
+                elif round == 4:
+                    self.brain = Ataque(ct) # ataque
+                elif round == 3:
+                    self.brain = Harvester(ct) # torreta
                 else:
                     self.brain = Harvester(ct) # normal
 
@@ -55,6 +82,8 @@ class Player:
             run_sentinel(self, ct)
         elif etype == EntityType.BREACH:
             run_breach(self, ct)
+        elif etype == EntityType.GUNNER:
+            run_gunner(self, ct)
         elif etype == EntityType.LAUNCHER:
             if self.brain is None:
                 self.brain = Launcher(ct)
