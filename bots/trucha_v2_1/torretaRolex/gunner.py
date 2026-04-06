@@ -23,6 +23,10 @@ def _get_enemy_priority_in_dir(pos: Position, direction: Direction, c: Controlle
         bid = c.get_tile_building_id(tile)
         if bid is not None:
             try:
+                if c.get_entity_type(bid) == EntityType.BRIDGE and c.get_bridge_target(bid) == c.get_position():
+                    continue # no disparar a un puente que nos da cobertura
+                if c.get_entity_type(bid) == EntityType.CONVEYOR and c.get_conveyor_direction(bid) == direction.opposite():
+                    continue # no disparar a una cinta transportadora que nos da cobertura
                 if c.get_team(bid) != c.get_team():
                     p = get_priority_by_type(c.get_entity_type(bid))
                     if p < best_priority:
@@ -92,6 +96,15 @@ def run_gunner(self, c: Controller):
     # Ya apuntamos en la dirección óptima: disparar
     target = c.get_gunner_target()
     if target is not None and c.can_fire(target):
+        #comprobar que no es nuestra la casilla objetivo
+        bid = c.get_tile_building_id(target)
+        if bid is not None:
+            if c.get_team(bid) == c.get_team() and c.get_entity_type(bid) != EntityType.ROAD:
+                builder_id = c.get_tile_builder_bot_id(target)
+                if builder_id is not None and c.get_team(builder_id) != c.get_team():
+                    pass # si hay un builder bot enemigo, sí disparar aunque haya una construcción aliada
+                else:
+                    return # no disparar a nuestras propias construcciones (salvo carreteras)
         c.fire(target)
 
 

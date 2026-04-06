@@ -402,9 +402,23 @@ class Ataque:
                 dir_to_enemy = target.direction_to(self.enemy_core_pos)
             else:
                 dir_to_enemy = Direction.NORTH
-
+            
             built = False
-            if c.can_build_gunner(target, dir_to_enemy):
+            #comprobar si está en rango de que el sentinel llega a la base pero gunner no, entonces construir sentinel
+            if self.enemy_core_pos is not None:
+                dist_to_enemy = target.distance_squared(self.enemy_core_pos)
+                if dist_to_enemy <= 32 and dist_to_enemy > 13: # rango de ataque del sentinel pero no llega el gunner
+                    dir_to_enemy = target.direction_to(self.enemy_core_pos)
+                    if c.can_build_sentinel(target, dir_to_enemy):
+                        c.build_sentinel(target, dir_to_enemy)
+                        built = True
+                else:
+                    if c.can_build_gunner(target, dir_to_enemy):
+                        c.build_gunner(target, dir_to_enemy)
+                        built = True
+
+            
+            elif c.can_build_gunner(target, dir_to_enemy):
                 c.build_gunner(target, dir_to_enemy)
                 built = True
             else:
