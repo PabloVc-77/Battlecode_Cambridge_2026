@@ -231,7 +231,15 @@ class Harvester:
                 building_id = c.get_tile_building_id(tile)
 
                 if building_id is not None:
-                    if c.get_entity_type(building_id) == EntityType.HARVESTER:
+                    transport_types = (
+                        EntityType.CONVEYOR,
+                        EntityType.ARMOURED_CONVEYOR,
+                        EntityType.BRIDGE,
+                        EntityType.SPLITTER,
+                    )
+                    entity = c.get_entity_type(building_id)
+                    team = c.get_team() == c.get_team(building_id)
+                    if entity == EntityType.HARVESTER:
                         if not revisor_casillas_extractor(c, tile):
                             if tile not in self.recolectores_set:
                                 self.recolectores.append(tile)
@@ -241,7 +249,7 @@ class Harvester:
                                 self.recolectores.remove(tile)
                                 self.recolectores_set.discard(tile)
                         continue
-                    elif c.get_entity_type(building_id) == EntityType.MARKER and c.get_team() == c.get_team(building_id):
+                    elif entity == EntityType.MARKER and team:
                         value = c.get_marker_value(building_id)
                         if value != c.get_id():
                             if tile in self.recolectores_set:
@@ -252,6 +260,15 @@ class Harvester:
                                 self.objetivos_set.discard(tile)
                                 changed = True
                             continue
+                    elif entity in transport_types and team:
+                        if tile in self.recolectores_set:
+                                self.recolectores.remove(tile)
+                                self.recolectores_set.discard(tile)
+                        if tile in self.objetivos_set:
+                            self.objetivos.remove(tile)
+                            self.objetivos_set.discard(tile)
+                            changed = True
+                        continue
                     else:
                         if not (c.is_tile_passable(tile) or (c.get_entity_type(building_id) == EntityType.BARRIER and c.get_team() == c.get_team(building_id))):
                             if tile in self.recolectores_set:
@@ -396,9 +413,11 @@ class Harvester:
                     viable_places.append(spot)
                     
         if len(viable_places) == 0:
-            self.current_target = None
-            self.mode = 0
-            return
+            if len(extra_places_for_turrent) == 0:
+                self.current_target = None
+                self.mode = 0
+                return
+            viable_places = extra_places_for_turrent
 
         current = c.get_position()
         viable_places.sort(key=lambda p: self.spawn.distance_squared(p))
