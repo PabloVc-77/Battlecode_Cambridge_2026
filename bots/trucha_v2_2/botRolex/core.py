@@ -9,13 +9,13 @@ def run_core(self, c: Controller):
                 self.num_spawned += 1
     
     ronda = c.get_current_round()
-    if self.num_spawned < 6 and ronda < 100:
+    if self.num_spawned < 5 and ronda < 100:
         if spawnBuilder(c):
             self.num_spawned += 1
         
     recursos = c.get_global_resources()        
 
-    limite = c.get_harvester_cost()[0] + c.get_builder_bot_cost()[0]
+    limite = c.get_foundry_cost()[0] + c.get_builder_bot_cost()[0]
 
     if limite <= recursos[0] and c.get_current_round() >= 100: 
         spawnBuilder(c)

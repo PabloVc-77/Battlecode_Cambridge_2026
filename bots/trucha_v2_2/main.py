@@ -18,7 +18,7 @@ from botRolex.core import run_core
 # BUILDER BOTS
 from botRolex.builder import Harvester
 from botRolex.builderTorretas import Torreta
-from botRolex.builderAtaque import Ataque
+from botRolex.builderAtaque2 import Ataque
 from botRolex.defensivo import Defensivo
 from botRolex.builderMuros import Muros
 from botRolex.healer import Healer

@@ -443,6 +443,8 @@ class BugNav:
                     self._path = []
             if self._bfs_path:
                 return self._consume_path(c, self._bfs_path, four_dirs, w, h)
+        elif self._bfs_path and _can_move(c, self._bfs_path[0], w, h):
+            return self._consume_path(c, self._bfs_path, four_dirs, w, h)
         else:
             self._bfs_path = []
 

@@ -1,305 +1,241 @@
-from operator import pos
-
 from cambc import Controller, Direction, EntityType, Environment, Position
-import math
 import bignav_a_mem as bugnav
+from botRolex.helper.layout_defensivo import (
+    _is_in_bounds, BASE_LAYOUT,
+    rotate_offset, rotate_dir,
+    choose_rotation, build_rotated_layout, compute_layout_for_core,
+)
 
-#get_tile_env(pos: Position) == None
 
-def _is_diagonal(d: Direction) -> bool:
-    dx, dy = d.delta()
-    return dx != 0 and dy != 0
+# ---------------------------------------------------------------------------
+# Build helpers
+# ---------------------------------------------------------------------------
 
-def _is_in_bounds(c: Controller, pos: Position) -> bool:
-    w = c.get_map_width()
-    h = c.get_map_height()
+def _building_matches(c: Controller, building_id, expected_type: EntityType,
+                      expected_dir: Direction) -> bool:
+    if building_id is None:
+        return False
+    actual_type = c.get_entity_type(building_id)
+    conveyor_types = (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR)
+    if actual_type in conveyor_types:
+        if expected_type not in conveyor_types:
+            return False
+    elif actual_type != expected_type:
+        return False
+    directed = (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR,
+                EntityType.SPLITTER, EntityType.SENTINEL)
+    if expected_type in directed:
+        return c.get_direction(building_id) == expected_dir
+    return True  # foundry: no direction check
 
-    return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
 
-def _conveyor_dir_to_core(tile: Position, core_pos: Position) -> Direction:
-    """
-    Devuelve la dirección cardinal en la que una conveyor en `tile`
-    debe apuntar para dirigirse hacia `core_pos`.
-    """
-    dx = core_pos.x - tile.x
-    dy = core_pos.y - tile.y
-
-    if dx == 0 and dy == 0:
-        return Direction.CENTRE
-
-    # Eje dominante — si empate, preferir eje x (arbitrario, ajusta si quieres)
-    if abs(dx) >= abs(dy):
-        return Direction.EAST if dx > 0 else Direction.WEST
-    else:
-        return Direction.SOUTH if dy > 0 else Direction.NORTH
-    
-def is_there_axionite(c: Controller, centro: Position):
-    cx = centro.x
-    cy = centro.y
-    casillas_validas = []
-
-    # Recorremos un área de 5x5 alrededor del centro (desde -2 hasta +2)
-    for dx in range(-2, 3):
-        for dy in range(-2, 3):
-            # TRUCO: Si la distancia máxima en x o en y es exactamente 2, 
-            # significa que estamos en el borde exterior (las 16 casillas que quieres).
-            if max(abs(dx), abs(dy)) == 2:
-                pos = Position(cx + dx, cy + dy)
-                # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
-                if c.is_in_vision(pos) and _is_in_bounds(c, pos):
-                    conveyor = c.get_tile_building_id(pos)
-                    if c.get_entity_type(conveyor) in [EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR]:
-                        material = c.get_stored_resource(conveyor)
-                        if material is not None and material.name == "RAW_AXIONITE":
-                            casillas_validas.append(pos)
-                    
-    return casillas_validas
+# ---------------------------------------------------------------------------
+# Main class
+# ---------------------------------------------------------------------------
 
 class Defensivo:
     def __init__(self, ct: Controller):
-        self.objetivos = []
-        self.spawn = None
-
-        # Builder_Defensivo Vars
-        self.my_core = None
-        self.furnace = False
-        self.splitter_pos = None
-        self.furnace_pos = None
-        self.fase2 = 0
-        self.replace = []
-        self.splitter_dir = None
-
         self.navegador = bugnav.BugNav()
+        self.my_core = None
+        self.node_position = None
+        self.rotation = None
+        self.layout = None
 
-        builds = ct.get_nearby_buildings()
-        for b in builds:
-            if ct.get_entity_type(b) == EntityType.CORE and ct.get_team() == ct.get_team(b):
-                self.spawn = ct.get_position(b)
+        self.entry_points = None
+        self.input = False
+
+        for b in ct.get_nearby_buildings():
+            if ct.get_entity_type(b) == EntityType.CORE:
+                self.my_core = b
+                self.node_position = ct.get_position(b)
                 break
-        pass
+        
+        result = compute_layout_for_core(ct, self.node_position)
+        self.rotation = result['rotation']
+        self.layout = result['layout']
+        self.entry_points = result['entry_positions']
+        self.layout_positions = result['layout_positions']
 
     def run(self, c: Controller):
-
-
-        if(self.my_core is None):
-            casillas = c.get_nearby_buildings()
-            #obtener posición del nodo
-            for nodeID in casillas:
-                if c.get_entity_type(nodeID) == EntityType.CORE:
-                    self.my_core = nodeID
-                    break
-        
-        if self.my_core is None or not c.is_in_vision(self.spawn):
+        if self.my_core is None:
             return
 
+        node_pos = self.node_position
+
+        # 1) Sense for entry material
+        if not self.input:
+            for entry in self.entry_points:
+                if c.is_in_vision(entry):
+                    b_id = c.get_tile_building_id(entry)
+                    if b_id is not None and c.get_entity_type(b_id) in (EntityType.SPLITTER, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                        if c.get_stored_resource(b_id) is not None:
+                            self.input = True
+                            break
+
+        # 2) Heal core if damaged
+        if (c.get_hp(self.my_core) < c.get_max_hp(self.my_core)
+                and c.can_heal(node_pos)):
+            c.heal(node_pos)
         
-        nodePosition = self.spawn
-        if c.is_in_vision(nodePosition):
-            
-            if(c.get_hp(self.my_core) < c.get_max_hp(self.my_core) and c.can_heal(nodePosition)):
-                c.heal(nodePosition)
-        
-        current = c.get_position()
-        
-        if c.can_heal(current):
-            c.heal(current)
-
-        direc = self.navegador.moveTo(c, nodePosition, False)
-
-        # AXIONITE MISION
-        entradas = is_there_axionite(c, nodePosition)
-        if((len(entradas) > 0 or self.furnace) and self.fase2 is not None):
-            self.furnace = True
-            if self.splitter_pos is None:
-                self.splitter_pos = entradas[0]
-            self.mision_axionite(c, nodePosition)
-            if (self.fase2 is not None and self.fase2 < 2 and c.get_global_resources()[0] >= c.get_splitter_cost()[0] + 15) or c.get_global_resources()[0] >= c.get_foundry_cost()[0] - 20:
-                return
-
-
-        circulo = self.obtener_anillo_16_casillas(c, nodePosition)
-        obj = None
-        if len(circulo) > 0:
-            obj = circulo[0]
-        else:
-            #ordenar_anillo(c, nodePosition)
-            pass
-        
-        if obj is not None:
-            c.draw_indicator_dot( obj, 186, 227, 0)
-            cdir = _conveyor_dir_to_core(obj, nodePosition)
-
-            if c.can_destroy(obj):
-                c.destroy(obj)
-            elif c.can_fire(obj):
-                c.fire(obj)
-            if c.can_build_armoured_conveyor(obj, cdir):
-                c.build_armoured_conveyor(obj, cdir)
-            elif c.can_build_conveyor(obj, cdir):
-                c.build_conveyor(obj, cdir)
-            else:
-                direc = self.navegador.moveTo(c, obj, False)
-
-        if(c.can_move(direc)):
-            c.move(direc)
-
-    def obtener_anillo_16_casillas(self, c: Controller, centro: Position):
-        cx = centro.x
-        cy = centro.y
-        casillas_validas = []
-
-        furnace = None
-        if self.furnace_pos is not None and c.is_in_vision(self.furnace_pos):
-            furnace = c.get_tile_building_id(self.furnace_pos)
-
-        # Recorremos un área de 5x5 alrededor del centro (desde -2 hasta +2)
-        for dx in range(-2, 3):
-            for dy in range(-2, 3):
-                # TRUCO: Si la distancia máxima en x o en y es exactamente 2, 
-                # significa que estamos en el borde exterior (las 16 casillas que quieres).
-                if max(abs(dx), abs(dy)) == 2 and abs(dx) != abs(dy):
-                    pos = Position(cx + dx, cy + dy)
-                    # Comprobamos que no se salga del mapa por si el Nexo está en una esquina
-                    if _is_in_bounds(c, pos) and c.is_in_vision(pos):
-                        something = c.get_tile_building_id(pos)
-                        if c.is_tile_empty(pos) or c.get_entity_type(something) in (EntityType.MARKER, EntityType.ROAD):
-                            if c.get_entity_type(something) == EntityType.ROAD and c.get_team(something) != c.get_team():
-                                continue
-                            
-                            casillas_validas.append(pos)
-
-        casillas_validas.sort(key=lambda p: centro.distance_squared(p))
-
-        for w in casillas_validas:
-            c.draw_indicator_dot(w, 245, 39, 204)
-                        
-        return casillas_validas
-
-    def mision_axionite(self, c: Controller, nodePosition: Position):
-        splitter_pos = self.splitter_pos
-        if self.furnace_pos is None:
-            viable_places =  [splitter_pos.add(Direction.NORTH), splitter_pos.add(Direction.EAST), splitter_pos.add(Direction.SOUTH), splitter_pos.add(Direction.WEST)]
-            true_viable_places = []
-            for vp in viable_places:
-                if _is_in_bounds(c, vp) and vp.distance_squared(nodePosition) <= 7 and vp.distance_squared(nodePosition) >= 4:
-                    c.draw_indicator_dot(vp, 245, 73, 39)
-                    true_viable_places.append(vp)
-
-            if len(true_viable_places) == 0:
-                self.furnace = False
-                return
-
-            self.furnace_pos = true_viable_places[0]
-        
-        furnace_pos = self.furnace_pos
-        current = c.get_position()
-
-        c.draw_indicator_dot(splitter_pos, 255, 255, 255)
-        c.draw_indicator_dot(furnace_pos, 0, 0, 0)
-
-        splitter_dir = splitter_pos.direction_to(nodePosition)
-        if _is_diagonal(splitter_dir):
-            splitter_dir = splitter_dir.rotate_left()
-
-        b_id_at_split = None
-
-        if c.is_in_vision(splitter_pos):
-            b_id_at_split = c.get_tile_building_id(splitter_pos)
-        else:
-            dir = self.navegador.moveTo(c, splitter_pos, False)
-            if c.can_move(dir):
-                c.move(dir)
-            return
-        
-        if(b_id_at_split is not None and c.get_entity_type(b_id_at_split) != EntityType.SPLITTER):
-            if c.can_destroy(splitter_pos):
-                if c.get_global_resources()[0] > c.get_splitter_cost()[0] and c.get_action_cooldown() == 0:
-                    if c.get_entity_type(b_id_at_split) == EntityType.CONVEYOR:
-                        self.splitter_dir = c.get_direction(b_id_at_split) # dirección: la misma del conveyor
-                    c.destroy(splitter_pos)
-            else:
-                direc = self.navegador.moveTo(c, splitter_pos, False)
-                if(c.can_move(direc)):
-                    c.move(direc)
-
-        b_id_at_split = c.get_tile_building_id(splitter_pos)
-
-        if self.splitter_dir is not None:
-            splitter_dir = self.splitter_dir # poner direccion del conveyor si lo había
-
-
-        if b_id_at_split is None:
-            if len(self.replace) == 0:
-                self.check_surrounding_conveyors(c, splitter_pos, splitter_dir)
-
-            if c.can_build_splitter(splitter_pos, splitter_dir):
-                c.build_splitter(splitter_pos, splitter_dir)
-                self.fase2 += 1
-        
-        if self.fase2 == 1:
-            if len(self.replace) == 0:
-                self.fase2 += 1
-            else:
-                r = self.replace[0]
-                if c.can_destroy(r) and c.get_global_resources()[0] > c.get_bridge_cost()[0] and c.get_action_cooldown() == 0:
-                    c.destroy(r)
-                else:
-                    build = c.get_tile_building_id(r)
-                    if build is not None and c.get_team(build) != c.get_team():
-                        self.replace.pop()
-                    else:
-                        dir = self.navegador.moveTo(c, r, False)
-                        if c.can_move(dir):
-                            c.move(dir)
-                
-                if c.can_build_bridge(r, splitter_pos):
-                    c.build_bridge(r, splitter_pos)
-                    self.replace.pop()
-
-        current = c.get_position()
-        if c.is_in_vision(furnace_pos):
-            b_id_at_furnace = c.get_tile_building_id(furnace_pos)
-        else:
-            dir = self.navegador.moveTo(c, furnace_pos, False)
-            if c.can_move(dir):
-                c.move(dir)
-            return
-        
-        if self.fase2 == 2 and c.get_global_resources()[0] >= c.get_foundry_cost()[0]:
-            if(b_id_at_furnace is not None and c.get_entity_type(b_id_at_furnace) != EntityType.FOUNDRY):
-                if c.can_destroy(furnace_pos):
-                    c.destroy(furnace_pos)
-                else:
-                    direc = self.navegador.moveTo(c, furnace_pos, False)
-                    if(c.can_move(direc)):
-                        c.move(direc)
-            elif b_id_at_furnace is None:
-                if c.can_build_foundry(furnace_pos):
-                    c.build_foundry(furnace_pos)
-                    self.fase2 = None
-                    self.furnace = False
-
-    def check_surrounding_conveyors(self, c: Controller, split_pos: Position, split_dir: Direction):
-        dirs = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
-
-        adj = []
-        for d in dirs:
-            p = split_pos.add(d)
-            if not _is_in_bounds(c, p) or p == self.furnace_pos:
+        # 3) Heal layout
+        damaged = []
+        for p in self.layout_positions:
+            if not c.is_in_vision(p) or not _is_in_bounds(c, p):
                 continue
-            if c.is_in_vision(p):
-                conveyor = c.get_tile_building_id(p)
-            else:
-                dir = self.navegador.moveTo(c, p, False)
+
+            b_id = c.get_tile_building_id(p)
+            hp = c.get_hp(b_id)
+            if c.get_team() == c.get_team(b_id) and hp < c.get_max_hp(b_id):
+                damaged.append((c.get_position(b_id), hp))
+        
+        damaged.sort(key=lambda x: x[1])
+        current = c.get_position()
+        heal_spot = None
+        if len(damaged) > 0:
+            heal_spot = damaged[0][0]
+        if heal_spot is not None and current.distance_squared(heal_spot) <= 2:
+            if c.can_heal(heal_spot):
+                c.heal(heal_spot)
+
+        # 4) Work on layout
+        target = self._find_next_build_target(c, node_pos)
+        if target is not None:
+            dx, dy, entity_type, build_fn, direction, _p = target
+            slot_pos = Position(node_pos.x + dx, node_pos.y + dy)
+            c.draw_indicator_dot(slot_pos, 255, 200, 0)
+            self._work_on_slot(c, slot_pos, entity_type, build_fn, direction)
+        else:
+            if heal_spot is not None and current.distance_squared(heal_spot) > 2:
+                dir = self.navegador.moveTo(c, heal_spot, False)
                 if c.can_move(dir):
                     c.move(dir)
-                return
-            if conveyor is not None and c.get_entity_type(conveyor) in [EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR]:
-                conv_dir = c.get_direction(conveyor)
-                if conv_dir != split_dir and conv_dir == p.direction_to(split_pos):
-                    adj.append(p)
-
-        if len(adj) == 0:
-            return
+            else:
+                self._idle_move(c, node_pos)
         
-        self.replace = adj
+        if heal_spot is not None and current.distance_squared(heal_spot) > 2:
+            dir = self.navegador.moveTo(c, heal_spot, False)
+            if c.can_move(dir):
+                c.move(dir)
+
+    def _find_next_build_target(self, c: Controller, node_pos: Position):
+        out_of_vision_fallback = None
+        best_p = -1
+        res = None
+        for entry in self.layout:
+            dx, dy, entity_type, build_fn, direction, _p = entry
+            slot_pos = Position(node_pos.x + dx, node_pos.y + dy)
+
+            if not _is_in_bounds(c, slot_pos):
+                continue
+            if not c.is_in_vision(slot_pos):
+                if out_of_vision_fallback is None:
+                    out_of_vision_fallback = entry
+                continue
+            if c.get_tile_env(slot_pos) == Environment.WALL:
+                continue
+
+            building_id = c.get_tile_building_id(slot_pos)
+            if _building_matches(c, building_id, entity_type, direction):
+                continue
+            
+            # Evitar poner elementos de prioridad baja (son caros)
+            if _p > 2 and not self.input:
+                continue
+            
+            if best_p < _p:
+                res = entry
+                best_p = _p
+        
+        if res is None:
+            res = out_of_vision_fallback
+        return res
+
+    def _work_on_slot(self, c: Controller, slot_pos: Position,
+                      entity_type: EntityType, build_fn: str,
+                      direction: Direction):
+        current = c.get_position()
+        building_id = c.get_tile_building_id(slot_pos)
+
+        needs_clear = (building_id is not None
+                       and not _building_matches(c, building_id, entity_type, direction))
+        if needs_clear:
+            if not self._clear_tile(c, slot_pos):
+                return
+
+        if not self._try_build(c, slot_pos, build_fn, direction) and current.distance_squared(slot_pos) > 2:
+            dir_ = self.navegador.moveTo(c, slot_pos, four_dirs=False)
+            next_pos = current.add(dir_)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir_):
+                c.move(dir_)
+
+    def _idle_move(self, c: Controller, node_pos: Position):
+        current = c.get_position()
+        if current.distance_squared(node_pos) > 4:
+            direc = self.navegador.moveTo(c, node_pos, four_dirs=False)
+            if c.can_move(direc):
+                c.move(direc)
+
+    def _try_build(self, c: Controller, pos: Position, build_type: str,
+                   direction: Direction) -> bool:
+        if pos == c.get_position():
+            dir_ = self.navegador.moveTo(c, c.get_position(self.my_core), four_dirs=False)
+            if c.can_move(dir_):
+                c.move(dir_)
+            return False
+
+        if build_type == "splitter":
+            if c.can_build_splitter(pos, direction):
+                c.build_splitter(pos, direction)
+                return True
+        elif build_type == "foundry":
+            if c.can_build_foundry(pos):
+                c.build_foundry(pos)
+                return True
+        elif build_type == "conveyor":
+            if c.can_build_armoured_conveyor(pos, direction):
+                c.build_armoured_conveyor(pos, direction)
+                return True
+            if c.can_build_conveyor(pos, direction):
+                c.build_conveyor(pos, direction)
+                return True
+        elif build_type == "sentinel":
+            if c.can_build_sentinel(pos, direction):
+                c.build_sentinel(pos, direction)
+                return True
+        return False
+
+    def _clear_tile(self, c: Controller, target: Position) -> bool:
+        building_id = c.get_tile_building_id(target)
+        if building_id is None:
+            return True
+
+        current = c.get_position()
+        is_ally = c.get_team(building_id) == c.get_team()
+
+        if is_ally:
+            if c.can_destroy(target):
+                c.destroy(target)
+                return True
+            dir_ = self.navegador.moveTo(c, target, four_dirs=False)
+            next_pos = current.add(dir_)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir_):
+                c.move(dir_)
+            return False
+        else:
+            if current == target:
+                if c.can_fire(target):
+                    c.fire(target)
+                    return c.get_tile_building_id(target) is None
+                return False
+            if c.is_tile_passable(target):
+                dir_ = self.navegador.moveTo(c, target, four_dirs=False)
+                next_pos = current.add(dir_)
+                if c.can_build_road(next_pos):
+                    c.build_road(next_pos)
+                if c.can_move(dir_):
+                    c.move(dir_)
+            return False
