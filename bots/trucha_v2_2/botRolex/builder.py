@@ -166,7 +166,7 @@ def _is_conv_better(c: Controller, ini: Position, end: Position, layout):
                 entity = c.get_entity_type(building_id)
                 if entity == EntityType.ROAD:
                     pass  # tratar como casilla libre
-                elif not c.is_tile_passable(neighbor) and (entity != EntityType.BARRIER or c.get_team() != c.get_team(building_id)):
+                elif not (c.is_tile_passable(neighbor) and c.get_tile_builder_bot_id(neighbor) is None) and (entity != EntityType.BARRIER or c.get_team() != c.get_team(building_id)):
                     if neighbor != c.get_position() and entity not in transport_types:
                         continue
                 elif entity in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.BRIDGE) and c.get_team() == c.get_team(building_id):
@@ -784,7 +784,6 @@ class Harvester:
             next_check = self.check_pos.add(c.get_direction(building_id))
         else:
             # Es un splitter
-            # No debería de pasar por ahora
             self.mode = 0
             self.check_pos = None
             self.last_bridge_end = None
@@ -954,7 +953,8 @@ class Harvester:
                         and c.get_entity_type(end_bid) in (
                             EntityType.BRIDGE,
                             EntityType.CONVEYOR,
-                            EntityType.ARMOURED_CONVEYOR)):
+                            EntityType.ARMOURED_CONVEYOR,
+                            EntityType.SPLITTER)):
                     self.mode = 3
                     return
             self.mode = 2
