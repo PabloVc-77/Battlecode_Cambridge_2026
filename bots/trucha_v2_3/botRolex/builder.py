@@ -166,6 +166,7 @@ class Harvester:
             # mode 3: revisar estructura (Naranja)
             # mode 4: conveyor mode (Azul Oscuro)
             # mode 5: gunner junto con conveyors (Rosa)
+            # mode 6: colocar turret anti-bloqueo (Cyan)
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
         self.check_pos = None
@@ -184,6 +185,19 @@ class Harvester:
         self.mode5_origin_path: list = []                 # conveyor_path guardado para retomar
         self.mode5_done_splitter: bool = False            # splitter ya colocado
         self.last_conveyor_dir: Direction | None = None   # dirección del último conveyor colocado en modo 4
+
+        # Mode 6 state: turret anti-bloqueo
+        # Se activa cuando el siguiente destino de construcción tiene una estructura
+        # enemiga no destructible. El bot vuelve al punto anterior y coloca un
+        # GUNNER (si tiene línea de tiro directa) o un SENTINEL (si no) apuntando
+        # hacia el bloqueo para eliminarlo.
+        self.mode6_turret_pos: Position | None = None     # dónde colocar el turret
+        self.mode6_turret_type: EntityType | None = None  # GUNNER o SENTINEL
+        self.mode6_turret_dir: Direction | None = None    # dirección hacia el bloqueo
+        self.mode6_blocker_pos: Position | None = None    # casilla bloqueada a eliminar
+        self.mode6_return_mode: int = 2                   # modo al que volver cuando el
+                                                          # bloqueo desaparezca o el turret
+                                                          # esté colocado
 
         # Cache de IDs de puentes verificados como conectados a la base en este turno
         self._connected_cache: dict[int, bool] = {}
@@ -283,6 +297,10 @@ class Harvester:
             c.draw_indicator_dot(current, 245, 39, 211)
             self.place_gunner_splitter(c)
             return
+        elif self.mode == 6:
+            c.draw_indicator_dot(current, 0, 220, 220)
+            self.place_antiblock_turret(c)
+            return
 
     # helper de mode 0
     def _has_viable_adjacent(self, c: Controller, tile: Position) -> bool:
@@ -316,13 +334,11 @@ class Harvester:
         ronda = c.get_current_round()
         for tile in lista:
             if tile in self.banned_ores:
-                if self.current_target == tile:
-                    self.current_target = None
                 continue
 
             env = c.get_tile_env(tile)  # llamada única por tile
             es_mineral = (env == Environment.ORE_TITANIUM or
-                          (env == Environment.ORE_AXIONITE and c.get_global_resources()[1] < 533) and len(self.titanium_harvesters) > 1)
+                          (env == Environment.ORE_AXIONITE and c.get_global_resources()[1] < 533) and len(self.titanium_harvesters) > 4)
             if es_mineral:
                 if not self._has_viable_adjacent(c, tile):
                     self.banned_ores.add(tile)
@@ -333,8 +349,6 @@ class Harvester:
                     if tile in self.recolectores_set:
                         self.recolectores.remove(tile)
                         self.recolectores_set.discard(tile)
-                    if self.current_target == tile:
-                        self.current_target = None
                     continue  # ore completamente bloqueado — ignorar
 
                 building_id = c.get_tile_building_id(tile)
@@ -350,7 +364,7 @@ class Harvester:
                     team = c.get_team() == c.get_team(building_id)
                     if entity == EntityType.HARVESTER:
                         flag = revisor_casillas_extractor(c, tile)
-                        if env == Environment.ORE_TITANIUM and flag:
+                        if env == Environment.ORE_TITANIUM and tile not in self.titanium_harvesters and flag:
                             self.titanium_harvesters.add(tile)
 
                         if tile in self.objetivos_set:
@@ -365,9 +379,6 @@ class Harvester:
                             if tile in self.recolectores_set:
                                 self.recolectores.remove(tile)
                                 self.recolectores_set.discard(tile)
-
-                            if self.current_target == tile:
-                                self.current_target = None
                         continue
                     elif entity == EntityType.MARKER and team:
                         value = c.get_marker_value(building_id)
@@ -379,8 +390,6 @@ class Harvester:
                                 self.objetivos.remove(tile)
                                 self.objetivos_set.discard(tile)
                                 changed = True
-                            if self.current_target == tile:
-                                self.current_target = None
                             continue
                     elif entity in transport_types and team:
                         if tile in self.recolectores_set:
@@ -390,8 +399,6 @@ class Harvester:
                             self.objetivos.remove(tile)
                             self.objetivos_set.discard(tile)
                             changed = True
-                        if self.current_target == tile:
-                            self.current_target = None
                         continue
                     else:
                         if not ((c.is_tile_passable(tile) and c.get_position() != tile) or (entity == EntityType.BARRIER and not team)):
@@ -402,8 +409,6 @@ class Harvester:
                                 self.objetivos.remove(tile)
                                 self.objetivos_set.discard(tile)
                                 changed = True
-                            if self.current_target == tile:
-                                self.current_target = None
                             continue
                 
                 if tile not in self.objetivos_set:
@@ -442,7 +447,7 @@ class Harvester:
         if len(targets) > 0 and self.current_target is None:
             target = targets[0]
         else:
-            target = self.current_target
+            target = None
 
         if target is not None:
             c.draw_indicator_line(current, target, 204, 39, 245)
@@ -479,7 +484,6 @@ class Harvester:
                 siguiente_dir = self.navegador.moveTo(c, target, four_dirs=False)
                 move_pos = current.add(siguiente_dir)
                 c.draw_indicator_line(current, move_pos, 66, 245, 39)
-
                 if c.can_build_road(move_pos):
                     c.build_road(move_pos)
                 if current.add(siguiente_dir).distance_squared(target) != 0:
@@ -509,6 +513,209 @@ class Harvester:
             if c.can_build_road(move_pos):
                 c.build_road(move_pos)
             self._try_move(c, move_dir)
+
+    # =========================================================================
+    # ANTIBLOCK: detección y colocación de turret para desbloquear el camino
+    # =========================================================================
+
+    def _is_enemy_nonpassable(self, c: Controller, pos: Position) -> bool:
+        """
+        Devuelve True si la casilla `pos` está bloqueada por una estructura
+        enemiga que no podemos destruir desde fuera (no es passable y no somos
+        su equipo), lo que requiere un turret para eliminarla.
+        """
+        if not c.is_in_vision(pos):
+            return False
+        bid = c.get_tile_building_id(pos)
+        if bid is None:
+            return False
+        if c.get_team(bid) == c.get_team():
+            return False  # estructura propia: _clear_tile la puede manejar
+        # Enemiga no pasable → bloqueo real
+        return not c.is_tile_passable(pos)
+
+    def _turret_type_for_blocker(
+        self,
+        c: Controller,
+        turret_pos: Position,
+        blocker_pos: Position,
+    ) -> tuple[EntityType, Direction] | None:
+        """
+        Decide qué turret colocar en `turret_pos` para atacar `blocker_pos`.
+
+        Lógica:
+        - Primero comprueba GUNNER: si tiene línea de fuego limpia desde
+          `turret_pos` hacia `blocker_pos` (usando can_fire_from con la
+          dirección exacta), elige GUNNER.
+        - Si no, elige SENTINEL (banda lateral ±1 alrededor de su línea
+          frontal; cubre rangos mayores sin necesidad de LoS limpia).
+        - La dirección del turret es siempre turret_pos.direction_to(blocker_pos).
+        - Devuelve None si blocker_pos está fuera de rango de ambos tipos o
+          no es visible.
+        """
+        if not c.is_in_vision(blocker_pos):
+            return None
+
+        direction = turret_pos.direction_to(blocker_pos)
+
+        # ── Intentar GUNNER ──────────────────────────────────────────────────
+        # El gunner dispara en línea recta en su dirección; necesitamos que
+        # can_fire_from confirme que el objetivo es alcanzable.
+        if c.can_fire_from(turret_pos, direction, EntityType.GUNNER, blocker_pos):
+            return (EntityType.GUNNER, direction)
+
+        # ── Fallback SENTINEL ────────────────────────────────────────────────
+        # El sentinel cubre una banda ±1 alrededor de su eje; más tolerante
+        # ante obstáculos laterales.
+        if c.can_fire_from(turret_pos, direction, EntityType.SENTINEL, blocker_pos):
+            return (EntityType.SENTINEL, direction)
+
+        return None
+
+    def _enter_antiblock_mode(
+        self,
+        c: Controller,
+        turret_pos: Position,
+        blocker_pos: Position,
+        return_mode: int,
+    ) -> bool:
+        """
+        Calcula el turret necesario y activa el modo 6 si es viable.
+        Devuelve True si se activó el modo 6, False si no se pudo (sin LoS,
+        sin rango, etc.) — en ese caso el llamador puede ignorar el bloqueo
+        o descartar el destino.
+        """
+        result = self._turret_type_for_blocker(c, turret_pos, blocker_pos)
+        if result is None:
+            return False
+
+        turret_type, turret_dir = result
+        self.mode6_turret_pos    = turret_pos
+        self.mode6_turret_type   = turret_type
+        self.mode6_turret_dir    = turret_dir
+        self.mode6_blocker_pos   = blocker_pos
+        self.mode6_return_mode   = return_mode
+        self.mode = 6
+        return True
+
+    # MODE 6
+
+    def place_antiblock_turret(self, c: Controller):
+        """
+        Modo 6: coloca un turret (GUNNER o SENTINEL) en mode6_turret_pos
+        apuntando a mode6_blocker_pos para eliminar la estructura enemiga
+        que bloqueaba el avance del camino de recursos.
+
+        Flujo:
+        1. Si el bloqueo ya desapareció → salir directamente al modo de retorno.
+        2. Acercarse a mode6_turret_pos si estamos lejos.
+        3. Limpiar la casilla si tiene algo propio.
+        4. Construir el turret.
+        5. Una vez construido → volver a mode6_return_mode para retomar la
+           construcción del camino.
+        """
+        current = c.get_position()
+        tp  = self.mode6_turret_pos
+        bp  = self.mode6_blocker_pos
+        td  = self.mode6_turret_dir
+        tty = self.mode6_turret_type
+
+        c.draw_indicator_dot(tp, 0, 220, 220)
+        if bp is not None:
+            c.draw_indicator_line(tp, bp, 220, 50, 50)
+
+        # ── 1. ¿El bloqueo ya desapareció? ──────────────────────────────────
+        if bp is not None and c.is_in_vision(bp):
+            bid = c.get_tile_building_id(bp)
+            if bid is None or c.get_team(bid) == c.get_team() or c.is_tile_passable(bp):
+                # Bloqueo resuelto: limpiar estado y volver
+                self._exit_antiblock_mode(c)
+                return
+
+        # ── 2. Acercarnos si estamos lejos ───────────────────────────────────
+        if current.distance_squared(tp) > 2:
+            dir_move = self.navegador.moveTo(c, tp, four_dirs=False)
+            next_pos = current.add(dir_move)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            self._try_move(c, dir_move)
+            return
+
+        # ── 3. No podemos estar encima de la casilla del turret ──────────────
+        if current == tp:
+            for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
+                adj = tp.add(d)
+                if self._in_bounds(adj) and c.can_move(d):
+                    c.move(d)
+                    break
+            return
+
+        # ── 4. Limpiar la casilla si tiene algo ─────────────────────────────
+        if c.is_in_vision(tp):
+            bid = c.get_tile_building_id(tp)
+            if bid is not None:
+                et = c.get_entity_type(bid)
+                tm = c.get_team(bid)
+                # Si ya hay el turret correcto apuntando en la dirección correcta: listo
+                if et == tty and tm == c.get_team() and c.get_direction(bid) == td:
+                    self._exit_antiblock_mode(c)
+                    return
+                if not self._clear_tile(c, tp):
+                    return
+
+        # ── 5. Construir el turret ───────────────────────────────────────────
+        built = False
+        if tty == EntityType.GUNNER:
+            if c.can_build_gunner(tp, td):
+                c.build_gunner(tp, td)
+                built = True
+        elif tty == EntityType.SENTINEL:
+            if c.can_build_sentinel(tp, td):
+                c.build_sentinel(tp, td)
+                built = True
+
+        if built:
+            self._exit_antiblock_mode(c)
+
+    def _exit_antiblock_mode(self, c: Controller):
+        """Limpia el estado del modo 6 y retoma el modo de retorno guardado."""
+        return_mode = self.mode6_return_mode
+        self.mode6_turret_pos  = None
+        self.mode6_turret_type = None
+        self.mode6_turret_dir  = None
+        self.mode6_blocker_pos = None
+        self.mode6_return_mode = 2
+        self.mode = return_mode
+
+    # =========================================================================
+    # HELPER: comprobar bloqueo antes de construir en modos 1, 2 y 4
+    # =========================================================================
+
+    def _check_and_handle_blocker(
+        self,
+        c: Controller,
+        build_pos: Position,   # casilla donde queremos construir
+        anchor_pos: Position,  # posición anterior del camino (donde va el turret)
+        return_mode: int,
+    ) -> bool:
+        """
+        Comprueba si `build_pos` está bloqueada por una estructura enemiga no
+        pasable. Si es así, intenta activar el modo 6 para colocar un turret
+        en `anchor_pos`.
+
+        Devuelve True si se detectó un bloqueo (el llamador debe hacer return),
+        False si todo está libre y se puede proceder normalmente.
+        """
+        if not self._is_enemy_nonpassable(c, build_pos):
+            return False
+
+        # Intentar activar el modo 6 desde anchor_pos
+        activated = self._enter_antiblock_mode(c, anchor_pos, build_pos, return_mode)
+        if not activated:
+            # Sin LoS/rango para ningún turret: descartar este destino para que
+            # _find_best_bridge_end busque otro en el próximo turno.
+            self.bridge_destination = None
+        return True
 
     # MODE 1
 
@@ -604,6 +811,9 @@ class Harvester:
                 self.conveyor_path = conv_path
                 if conv_path is not None and len(conv_path) > 0:
                     conv_pos, conv_dir = conv_path[0]
+                    # ── Antibloqueo modo 4: casilla de primer conveyor bloqueada ──
+                    if self._check_and_handle_blocker(c, conv_pos, place, 1):
+                        return
                     if c.can_build_armoured_conveyor(conv_pos, conv_dir):
                         c.build_armoured_conveyor(conv_pos, conv_dir)
                         self.conveyor_path.pop(0)
@@ -620,6 +830,10 @@ class Harvester:
             c.draw_indicator_dot(target_end, 255, 255, 255)
 
         c.draw_indicator_dot(end, 255, 255, 255)
+
+        # ── Antibloqueo modo 1: destino del puente bloqueado por estructura enemiga ──
+        if self._check_and_handle_blocker(c, end, place, 1):
+            return
 
         # Quitar barrier propia en place si la hay
         building_id_place = c.get_tile_building_id(place)
@@ -698,6 +912,9 @@ class Harvester:
                 self.conveyor_path = conv_path
                 if conv_path is not None and len(conv_path) > 0:
                     conv_pos, conv_dir = conv_path[0]
+                    # ── Antibloqueo modo 2→4: casilla de primer conveyor bloqueada ──
+                    if self._check_and_handle_blocker(c, conv_pos, bridge_end, 2):
+                        return
                     if c.can_build_armoured_conveyor(conv_pos, conv_dir):
                         c.build_armoured_conveyor(conv_pos, conv_dir)
                         self.conveyor_path.pop(0)
@@ -723,6 +940,10 @@ class Harvester:
                 and c.get_team(building_id_be) == c.get_team()):
             if c.can_destroy(bridge_end):
                 c.destroy(bridge_end)
+            return
+
+        # ── Antibloqueo modo 2: destino del siguiente puente bloqueado ────────
+        if self._check_and_handle_blocker(c, end, bridge_end, 2):
             return
 
         # si no hay conveyor, comportamiento normal
@@ -879,6 +1100,18 @@ class Harvester:
                         if end is not None:
                             self.last_bridge_end = end
                             self._check_conveyor_chain_end(c, end)
+                        return
+
+                # ── Antibloqueo modo 4: estructura enemiga no pasable ────────────
+                # El anchor es el último conveyor colocado (last_bridge_end retrocede
+                # un paso) o la posición actual si no hay ninguno previo.
+                if team != c.get_team() and not c.is_tile_passable(conv_pos):
+                    # Buscamos la casilla anterior en el path como punto de turret:
+                    # si hay más de un paso pendiente, el anchor es el tile de salida
+                    # del paso anterior (conv_path[1] apuntaría hacia delante, así que
+                    # usamos last_bridge_end que ya es el endpoint del paso anterior).
+                    anchor = self.last_bridge_end if self.last_bridge_end is not None else current
+                    if self._check_and_handle_blocker(c, conv_pos, anchor, 4):
                         return
 
                 # Cualquier otro edificio: intentar limpiar
@@ -1820,7 +2053,7 @@ class Harvester:
                             continue  # estructura aliada no transitable
                     else:
                         if not c.is_tile_passable(candidate):
-                            continue  # estructura enemiga no transitable
+                            continue  # estructura enemiga no transitable — excluir del scoring
 
                 plus = 0
                 if self.is_axionite_path and candidate in self.end_bridges_axionite:
