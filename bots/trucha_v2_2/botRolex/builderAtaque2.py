@@ -250,7 +250,8 @@ class Ataque:
                 env = c.get_tile_env(adj)
                 if env == Environment.WALL:
                     continue
-
+                if not c.is_tile_passable(adj):
+                    continue
                 existing = c.get_tile_building_id(adj)
                 if existing is not None:
                     # Solo aceptar si es una road (aliada o enemiga)
