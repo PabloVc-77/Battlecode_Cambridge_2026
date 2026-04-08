@@ -102,7 +102,13 @@ class Defensivo:
         if target is not None:
             dx, dy, entity_type, build_fn, direction, _p = target
             slot_pos = Position(node_pos.x + dx, node_pos.y + dy)
+            if not c.is_in_vision(slot_pos):
+                dir = self.navegador.moveTo(c, slot_pos, False)
+                if c.can_move(dir):
+                    c.move(dir)
             c.draw_indicator_dot(slot_pos, 255, 200, 0)
+            if not c.is_in_vision(slot_pos):
+                return
             self._work_on_slot(c, slot_pos, entity_type, build_fn, direction)
         else:
             if heal_spot is not None and current.distance_squared(heal_spot) > 2:
@@ -112,7 +118,7 @@ class Defensivo:
             else:
                 self._idle_move(c, node_pos)
         
-        if heal_spot is not None and current.distance_squared(heal_spot) > 2:
+        if heal_spot is not None and current.distance_squared(heal_spot) > 2 and c.get_move_cooldown() == 0:
             dir = self.navegador.moveTo(c, heal_spot, False)
             if c.can_move(dir):
                 c.move(dir)

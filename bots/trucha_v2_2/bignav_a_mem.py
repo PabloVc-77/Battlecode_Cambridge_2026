@@ -50,7 +50,7 @@ from map_symmetry import MapSymmetry
 # Constantes
 # ---------------------------------------------------------------------------
 
-CPU_BUDGET_US = 1700      # µs máximos por tick antes de ceder el control
+CPU_BUDGET_US = 1200      # µs máximos por tick antes de ceder el control
 BFS_MAX_NODES = 80        # BFS rápido cuando goal está en visión
 
 _ALL_DIRS = [

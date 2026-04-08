@@ -65,56 +65,6 @@ def _bridge_is_axionite_tagged(c: Controller, bridge_pos: Position) -> bool:
                 return True
     return False
 
-def _chain_has_axionite(c: Controller, start_pos: Position, depth: int = 2) -> bool:
-    """
-    Recorre hacia adelante la cadena de transporte desde start_pos hasta
-    `depth` saltos. Devuelve True si algún nodo lleva marker de axionita
-    o almacena raw/refined axionite.
-    """
-    transport_types = (EntityType.BRIDGE, EntityType.CONVEYOR,
-                       EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER)
-    pos = start_pos
-    visited = {pos}
-    for _ in range(depth):
-        if not c.is_in_vision(pos):
-            break
-        bid = c.get_tile_building_id(pos)
-        if bid is None:
-            break
-        et = c.get_entity_type(bid)
-        if c.get_team(bid) != c.get_team():
-            break
-        if et not in transport_types:
-            break
-        # ¿Marker axionita en esta casilla?
-        if _bridge_is_axionite_tagged(c, pos):
-            return True
-        # ¿Almacena axionita?
-        try:
-            stored = c.get_stored_resource(bid)
-            if stored in (ResourceType.RAW_AXIONITE, ResourceType.REFINED_AXIONITE):
-                return True
-        except Exception:
-            pass
-        # Avanzar
-        nxt = None
-        if et == EntityType.BRIDGE:
-            try:
-                nxt = c.get_bridge_target(bid)
-            except Exception:
-                pass
-        elif et in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
-            try:
-                nxt = pos.add(c.get_direction(bid))
-            except Exception:
-                pass
-        if nxt is None or nxt in visited:
-            break
-        visited.add(nxt)
-        pos = nxt
-    return False
-
-
 def _is_conv_better(c: Controller, ini: Position, end: Position, layout):
     """
     BFS desde ini hasta end. En cada paso el coste acumulado es:
@@ -193,6 +143,7 @@ class Harvester:
     def __init__(self, c: Controller):
         self.objetivos = []
         self.objetivos_set = set()   # espejo de self.objetivos para lookups O(1)
+        self.recolectores = []
         self.recolectores_set = set()  # espejo de self.recolectores para lookups O(1)
 
         # Dimensiones del mapa cacheadas — el mapa no cambia nunca
@@ -223,7 +174,6 @@ class Harvester:
         self.bridge_origin = None         # casilla origen del puente pendiente de construir
         self.bridge_destination = None    # casilla destino del puente pendiente de construir
 
-        self.recolectores = []
         self.turret_places = []
 
         # Mode 5 state
@@ -250,6 +200,12 @@ class Harvester:
         # Se rellenan al final de __init__ una vez que end_bridges esté listo.
         self.end_bridges_axionite: list[Position] = []  # primero de end_bridges
         self.end_bridges_titanium: list[Position] = []  # el resto
+
+        # Priority to build Titatium before Axionite
+        self.titanium_harvesters: set[Position] = set()
+
+        # Ban ore si no podemos llegar
+        self.banned_ores: set[Position] = set()
 
         builds = c.get_nearby_buildings()
         for b in builds:
@@ -329,16 +285,54 @@ class Harvester:
             return
 
     # helper de mode 0
+    def _has_viable_adjacent(self, c: Controller, tile: Position) -> bool:
+        """
+        Devuelve True si el ore en `tile` tiene al menos una casilla cardinal
+        adyacente donde sea posible construir un harvester (no wall, in-bounds,
+        sin edificio bloqueante no-aliado).
+        """
+        for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
+            adj = tile.add(d)
+            if not self._in_bounds(adj):
+                continue
+            if c.is_in_vision(adj):
+                env = c.get_tile_env(adj)
+                if env == Environment.WALL:
+                    continue
+                bid = c.get_tile_building_id(adj)
+                if bid is None:
+                    return True
+                # Passable (conveyor aliada, etc.) también vale
+                if c.is_tile_passable(adj):
+                    return True
+            else:
+                # Fuera de visión: asumir viable (no rechazar prematuramente)
+                return True
+        return False
+
     def oreCerca(self, c: Controller):
         lista = c.get_nearby_tiles()
         changed = False
         ronda = c.get_current_round()
         for tile in lista:
+            if tile in self.banned_ores:
+                continue
+
             env = c.get_tile_env(tile)  # llamada única por tile
             es_mineral = (env == Environment.ORE_TITANIUM or
-                          (env == Environment.ORE_AXIONITE and c.get_global_resources()[1] < 533) and c.get_current_round() > 50)
-
+                          (env == Environment.ORE_AXIONITE and c.get_global_resources()[1] < 533) and len(self.titanium_harvesters) > 4)
             if es_mineral:
+                if not self._has_viable_adjacent(c, tile):
+                    self.banned_ores.add(tile)
+                    if tile in self.objetivos_set:
+                        self.objetivos.remove(tile)
+                        self.objetivos_set.discard(tile)
+                        changed = True
+                    if tile in self.recolectores_set:
+                        self.recolectores.remove(tile)
+                        self.recolectores_set.discard(tile)
+                    continue  # ore completamente bloqueado — ignorar
+
                 building_id = c.get_tile_building_id(tile)
 
                 if building_id is not None:
@@ -351,7 +345,15 @@ class Harvester:
                     entity = c.get_entity_type(building_id)
                     team = c.get_team() == c.get_team(building_id)
                     if entity == EntityType.HARVESTER:
-                        if not revisor_casillas_extractor(c, tile):
+                        flag = revisor_casillas_extractor(c, tile)
+                        if env == Environment.ORE_TITANIUM and tile not in self.titanium_harvesters and flag:
+                            self.titanium_harvesters.add(tile)
+
+                        if tile in self.objetivos_set:
+                            self.objetivos.remove(tile)
+                            self.objetivos_set.discard(tile)
+                            changed = True
+                        if not flag:
                             if tile not in self.recolectores_set:
                                 self.recolectores.append(tile)
                                 self.recolectores_set.add(tile)
@@ -381,7 +383,7 @@ class Harvester:
                             changed = True
                         continue
                     else:
-                        if not (c.is_tile_passable(tile) or (c.get_entity_type(building_id) == EntityType.BARRIER and c.get_team() == c.get_team(building_id))):
+                        if not ((c.is_tile_passable(tile) and c.get_position() != tile) or (entity == EntityType.BARRIER and not team)):
                             if tile in self.recolectores_set:
                                 self.recolectores.remove(tile)
                                 self.recolectores_set.discard(tile)
@@ -390,7 +392,7 @@ class Harvester:
                                 self.objetivos_set.discard(tile)
                                 changed = True
                             continue
-
+                
                 if tile not in self.objetivos_set:
                     self.objetivos.append(tile)
                     self.objetivos_set.add(tile)
@@ -418,11 +420,14 @@ class Harvester:
                 if c.can_fire(current):
                     c.fire(current)
                 return
+            
+        targets = self.objetivos
+        targets.extend(self.recolectores)
 
-        if len(self.objetivos) > 0 and self.current_target is None:
-            target = self.objetivos[0]
-        elif len(self.recolectores) > 0 and self.current_target is None:
-            target = self.recolectores[0]
+        targets.sort(key=lambda p: current.distance_squared(p))
+
+        if len(targets) > 0 and self.current_target is None:
+            target = targets[0]
         else:
             target = None
 
@@ -434,9 +439,10 @@ class Harvester:
 
             if c.is_in_vision(target):
                 build_id = c.get_tile_building_id(target)
-                if (build_id is not None and c.get_entity_type(build_id) != EntityType.HARVESTER) and not self._clear_tile(c, target):
-                    return  # Aún no lo hemos roto
-                
+                if (build_id is not None and c.get_entity_type(build_id) != EntityType.HARVESTER 
+                    and not self._clear_tile(c, target)):
+                        return  # Aún no lo hemos roto
+
             if c.can_place_marker(target):
                 c.place_marker(target, c.get_id())
                 self.current_target = target
@@ -1016,24 +1022,6 @@ class Harvester:
 
         c.draw_indicator_dot(gp, 255, 50, 200)  # Rosa
 
-        # Si estamos encima de la casilla del gunner, apartarse primero
-        if current == gp:
-            for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
-                adj = gp.add(d)
-                if self._in_bounds(adj) and c.can_move(d):
-                    c.move(d)
-                    break
-            return  # esperar al turno siguiente para construir
-
-        # Acercarse si es necesario
-        if current.distance_squared(gp) > 2:
-            dir = self.navegador.moveTo(c, gp, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
-            return
-
         # Limpiar si hay algo en la casilla
         if c.is_in_vision(gp):
             bid = c.get_tile_building_id(gp)
@@ -1046,9 +1034,24 @@ class Harvester:
                     return
                 if not self._clear_tile(c, gp):
                     return
-
-        if not self._clear_tile(c, gp):
+                
+        # Acercarse si es necesario
+        if current.distance_squared(gp) > 2:
+            dir = self.navegador.moveTo(c, gp, four_dirs=False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            self._try_move(c, dir)
             return
+                
+        # Si estamos encima de la casilla del gunner, apartarse primero
+        if current == gp:
+            for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
+                adj = gp.add(d)
+                if self._in_bounds(adj) and c.can_move(d):
+                    c.move(d)
+                    break
+            return  # esperar al turno siguiente para construir
 
         if c.can_build_gunner(gp, gd):
             c.build_gunner(gp, gd)
@@ -1418,6 +1421,54 @@ class Harvester:
     _CARGO_PENALTY  = -200  # penalización si el nodo tiene material en storage
 
     # ── HELPERS ──────────────────────────────────────────────────────────────────
+    def _chain_has_axionite(self, c: Controller, start_pos: Position, depth: int = 2) -> bool:
+        """
+        Recorre hacia adelante la cadena de transporte desde start_pos hasta
+        `depth` saltos. Devuelve True si algún nodo lleva marker de axionita
+        o almacena raw/refined axionite.
+        """
+        pos = start_pos
+        visited = {pos}
+        for _ in range(depth):
+            if not c.is_in_vision(pos):
+                break
+            bid = c.get_tile_building_id(pos)
+            if bid is None:
+                break
+            et = c.get_entity_type(bid)
+            if c.get_team(bid) != c.get_team():
+                break
+            if et != EntityType.BRIDGE:
+                if pos in self.end_bridges_axionite:
+                    return self.is_axionite_path
+                break
+            # ¿Marker axionita en esta casilla?
+            if _bridge_is_axionite_tagged(c, pos):
+                return True
+            # ¿Almacena axionita?
+            try:
+                stored = c.get_stored_resource(bid)
+                if stored in (ResourceType.RAW_AXIONITE, ResourceType.REFINED_AXIONITE):
+                    return True
+            except Exception:
+                pass
+            # Avanzar
+            nxt = None
+            if et == EntityType.BRIDGE:
+                try:
+                    nxt = c.get_bridge_target(bid)
+                except Exception:
+                    pass
+            elif et in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                try:
+                    nxt = pos.add(c.get_direction(bid))
+                except Exception:
+                    pass
+            if nxt is None or nxt in visited:
+                break
+            visited.add(nxt)
+            pos = nxt
+        return False
 
     def _loops_to_me(self, c: Controller, id: int, depth: int = 6):
         me = self.last_bridge_end
@@ -1720,21 +1771,24 @@ class Harvester:
                 if bid is not None:
                     if team == c.get_team():
                         if entity in transport_types:
-                            # ── Comprobación de contaminación cruzada ──────────────────
-                            # Un camino de axionita solo puede conectar a cadenas de axionita
-                            # (identificadas por marker 833xxyy). Un camino de titanio nunca
-                            # puede conectar a cadenas marcadas o que contengan axionita.
-                            chain_is_axionite = _bridge_is_axionite_tagged(c, candidate) or \
-                                                _chain_has_axionite(c, candidate)
-                            if self.is_axionite_path and not chain_is_axionite and \
-                               candidate not in self.end_bridges_axionite:
-                                continue  # ruta axionita no conecta a cadena sin marcador
-                            if self.is_axionite_path and self._loops_to_me(c, bid) and \
-                               candidate not in self.end_bridges_axionite:
+                            if entity == EntityType.BRIDGE:
+                                # ── Comprobación de contaminación cruzada ──────────────────
+                                # Un camino de axionita solo puede conectar a cadenas de axionita
+                                # (identificadas por marker 833xxyy). Un camino de titanio nunca
+                                # puede conectar a cadenas marcadas o que contengan axionita.
+                                chain_is_axionite = _bridge_is_axionite_tagged(c, candidate) or \
+                                                    self._chain_has_axionite(c, candidate)
+                                if self.is_axionite_path and not chain_is_axionite and \
+                                candidate not in self.end_bridges_axionite:
+                                    continue  # ruta axionita no conecta a cadena sin marcador
+                                if self.is_axionite_path and self._loops_to_me(c, bid) and \
+                                candidate not in self.end_bridges_axionite:
+                                    continue
+                                if not self.is_axionite_path and chain_is_axionite:
+                                    continue  # ruta titanio no conecta a cadena axionita
+                                # Si is_axionite_path y chain_is_axionite → fluye normalmente con merge_bonus alto
+                            elif self.is_axionite_path and candidate not in self.end_bridges_axionite:
                                 continue
-                            if not self.is_axionite_path and chain_is_axionite:
-                                continue  # ruta titanio no conecta a cadena axionita
-                            # Si is_axionite_path y chain_is_axionite → fluye normalmente con merge_bonus alto
                             merge_bonus = 100 if (self.is_axionite_path) else self._MERGE_TIEBREAK
 
                             # Seguir cadena → endpoint real (todo en cache, 0 llamadas API)
@@ -1748,7 +1802,7 @@ class Harvester:
                                 congestion_pen = self._transport_congestion_penalty(bid, candidate, get_cached)
                         elif entity == EntityType.CORE:
                             continue
-                        elif not c.is_tile_passable(candidate):
+                        elif not c.is_tile_passable(candidate) and c.get_tile_builder_bot_id(candidate) is None:
                             continue  # estructura aliada no transitable
                     else:
                         if not c.is_tile_passable(candidate):

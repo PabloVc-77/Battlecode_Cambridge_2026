@@ -167,11 +167,20 @@ def choose_rotation(c: Controller, node_pos: Position) -> str:
     return max(_ROTATIONS, key=lambda r: score_rotation(c, node_pos, r))
 
 
-def build_rotated_layout(rotation: str) -> list:
+def build_rotated_layout(c : Controller, rotation: str, core_pos: Position) -> list:
     result = []
     for (dx, dy, etype, build_fn, direction, priority) in BASE_LAYOUT:
         new_dx, new_dy = rotate_offset(dx, dy, rotation)
         new_dir = rotate_dir(direction, rotation)
+        if etype == EntityType.SPLITTER:
+            pos = Position(core_pos.x + dx, core_pos.y + dy)
+            pos_check = pos.add(new_dir.opposite())
+            if not _is_in_bounds(c, pos_check) or c.get_tile_env(pos_check) == Environment.WALL:
+                # Rotar para soportar conveyors
+                if dx == 1:
+                    new_dir = rotate_dir(Direction.WEST, rotation)
+                else:
+                    new_dir = rotate_dir(Direction.EAST, rotation)
         result.append((new_dx, new_dy, etype, build_fn, new_dir, priority))
     return result
 
@@ -192,7 +201,7 @@ def compute_layout_for_core(c: Controller, core_pos: Position) -> dict:
     Call once in __init__ (or on the first run() tick when core is found).
     """
     rotation = choose_rotation(c, core_pos)
-    layout = sorted(build_rotated_layout(rotation), key=lambda e: e[5])
+    layout = sorted(build_rotated_layout(c, rotation, core_pos), key=lambda e: e[5])
 
     layout_positions = set()
     entry_positions = []
