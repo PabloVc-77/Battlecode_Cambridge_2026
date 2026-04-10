@@ -15,6 +15,10 @@ _ALL_DIRS = (
     Direction.SOUTH, Direction.SOUTHWEST, Direction.WEST, Direction.NORTHWEST,
 )
 
+_CARD_DIRS = (
+    Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST,
+)
+
 # Turnos consecutivos atacando sin progreso antes de marcar como bloqueado
 _STALL_THRESHOLD = 8
 # Turnos que un objetivo permanece bloqueado antes de reintentarse
@@ -34,6 +38,9 @@ class Ataque:
         self.has_seen_enemy_core = False
 
         self.objetivo: Position | None = None
+
+        # True cuando el objetivo es una casilla adyacente a un harvester enemigo
+        self.objetivo_es_harvester_adj: bool = False
 
         # True cuando ya destruimos el edificio en objetivo y hay que colocar torreta.
         # Mientras sea True, _scan_enemies NO toca self.objetivo.
@@ -142,6 +149,7 @@ class Ataque:
         self.objetivo = None
         self.pendiente_torreta = False
         self.objetivo_es_destino_libre = False
+        self.objetivo_es_harvester_adj = False
         self._stall_turns = 0
         self._last_objetivo_hp = None
         self._stall_objetivo = None
@@ -157,7 +165,6 @@ class Ataque:
         Si el HP no baja en _STALL_THRESHOLD turnos consecutivos, bloqueamos el objetivo.
         """
         if self.objetivo is None or self.pendiente_torreta:
-            # No estamos atacando un edificio enemigo: resetear contadores
             self._stall_turns = 0
             self._last_objetivo_hp = None
             self._stall_objetivo = None
@@ -165,7 +172,6 @@ class Ataque:
 
         target = self.objetivo
 
-        # Si cambió el objetivo, resetear
         if self._stall_objetivo != target:
             self._stall_objetivo = target
             self._stall_turns = 0
@@ -176,7 +182,6 @@ class Ataque:
 
         bid = c.get_tile_building_id(target)
         if bid is None or c.get_team(bid) == c.get_team():
-            # El edificio ya no existe o es nuestro: sin estancamiento
             self._stall_turns = 0
             self._last_objetivo_hp = None
             return
@@ -184,7 +189,6 @@ class Ataque:
         current = c.get_position()
         dist = current.distance_squared(target)
 
-        # Solo contamos estancamiento cuando estamos encima o adyacentes y activos
         if dist > 2:
             self._stall_turns = 0
             self._last_objetivo_hp = None
@@ -194,17 +198,70 @@ class Ataque:
 
         if self._last_objetivo_hp is not None:
             if current_hp >= self._last_objetivo_hp:
-                # HP igual o mayor: sin progreso (curación enemiga)
                 self._stall_turns += 1
             else:
-                # HP bajó: progresamos
                 self._stall_turns = 0
 
         self._last_objetivo_hp = current_hp
 
         if self._stall_turns >= _STALL_THRESHOLD:
-            c.draw_indicator_dot(current, 255, 0, 255)  # magenta = estancado, bloqueando
+            c.draw_indicator_dot(current, 255, 0, 255)
             self._block_objetivo(c)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Lógica de casillas adyacentes a harvesters enemigos
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _scan_harvester_adjacents(self, c: Controller) -> list[tuple[Position, float]]:
+        """
+        Busca casillas cardinalmente adyacentes a harvesters enemigos en visión
+        que estén vacías o solo tengan una road (aliada o enemiga).
+        Devuelve lista de (pos, dist²) ordenable, excluyendo bloqueadas.
+        """
+        current = c.get_position()
+        candidates: list[tuple[Position, float]] = []
+        seen: set[Position] = set()
+
+        for bid in c.get_nearby_buildings():
+            if c.get_team(bid) == c.get_team():
+                continue
+            if c.get_entity_type(bid) != EntityType.HARVESTER:
+                continue
+
+
+            harv_pos = c.get_position(bid)
+
+            if c.get_tile_env(harv_pos) == Environment.ORE_AXIONITE:
+                continue
+
+            for d in _CARD_DIRS:
+                adj = harv_pos.add(d)
+                if adj in seen:
+                    continue
+                if not _is_in_bounds(c, adj):
+                    continue
+                if not c.is_in_vision(adj):
+                    continue
+                if self._is_blocked(adj):
+                    continue
+
+                seen.add(adj)
+
+                env = c.get_tile_env(adj)
+                if env == Environment.WALL:
+                    continue
+                if not c.is_tile_passable(adj):
+                    continue
+                existing = c.get_tile_building_id(adj)
+                if existing is not None:
+                    # Solo aceptar si es una road (aliada o enemiga)
+                    if c.get_entity_type(existing) != EntityType.ROAD:
+                        continue
+
+                dist = current.distance_squared(adj)
+                candidates.append((adj, dist))
+
+        return candidates
 
     # ──────────────────────────────────────────────────────────────────────────
     # Lógica de "final de línea"
@@ -214,16 +271,6 @@ class Ataque:
         """
         Para un conveyor o bridge enemigo, determina cuál es la casilla objetivo
         y si es un "destino libre" (casilla vacía/road a la que apunta) o no.
-
-        Devuelve (objetivo_pos, es_destino_libre) o None si no es un final de línea.
-
-        Reglas:
-          - conveyor apunta al core enemigo → objetivo = casilla del conveyor, no libre
-          - conveyor apunta a casilla vacía o road → objetivo = casilla destino, libre
-          - conveyor apunta a torreta → objetivo = casilla del conveyor, no libre
-          - bridge apunta al core enemigo → objetivo = casilla del bridge, no libre
-          - bridge apunta a casilla vacía o road → objetivo = casilla destino, libre
-          - bridge apunta a torreta → objetivo = casilla del bridge, no libre
         """
         etype = c.get_entity_type(bid)
         building_pos = c.get_position(bid)
@@ -272,6 +319,16 @@ class Ataque:
         if self.objetivo is not None:
             if c.is_in_vision(self.objetivo):
                 bid = c.get_tile_building_id(self.objetivo)
+
+                if self.objetivo_es_harvester_adj:
+                    # El objetivo harvester-adj está listo cuando ya hay una torreta aliada ahí
+                    if bid is not None and c.get_team(bid) == c.get_team() \
+                            and c.get_entity_type(bid) in _TURRET_TYPES:
+                        self.objetivo = None
+                        self.pendiente_torreta = False
+                        self.objetivo_es_harvester_adj = False
+                    return
+
                 if self.pendiente_torreta or self.objetivo_es_destino_libre:
                     if bid is not None and c.get_team(bid) == c.get_team() \
                             and c.get_entity_type(bid) in _TURRET_TYPES:
@@ -287,6 +344,31 @@ class Ataque:
                     if bid is None or c.get_team(bid) == c.get_team():
                         self.objetivo = None
                         self.objetivo_es_destino_libre = False
+
+        # ── Prioridad 0: casillas adyacentes a harvesters enemigos ────────────
+        harv_candidates = self._scan_harvester_adjacents(c)
+        if harv_candidates:
+            best_pos, best_dist = min(harv_candidates, key=lambda t: t[1])
+
+            # Si ya tenemos un objetivo harvester-adj, solo reemplazar si este es más cercano
+            if self.objetivo_es_harvester_adj and self.objetivo is not None:
+                cur_dist = current.distance_squared(self.objetivo)
+                if best_dist < cur_dist:
+                    self.objetivo = best_pos
+                    self.pendiente_torreta = True
+                    self.objetivo_es_destino_libre = False
+            else:
+                self.objetivo = best_pos
+                self.objetivo_es_harvester_adj = True
+                self.pendiente_torreta = True
+                self.objetivo_es_destino_libre = False
+            return
+
+        # Si teníamos un objetivo harvester-adj pero ya no lo vemos, limpiar
+        if self.objetivo_es_harvester_adj:
+            self.objetivo = None
+            self.objetivo_es_harvester_adj = False
+            self.pendiente_torreta = False
 
         # ── Recopilar candidatos de "final de línea" en visión ────────────────
         candidates_libres: list[tuple[Position, float]] = []
@@ -310,7 +392,6 @@ class Ataque:
 
             obj_pos, es_libre = result
 
-            # Excluir objetivos bloqueados temporalmente
             if self._is_blocked(obj_pos):
                 continue
 
@@ -359,6 +440,59 @@ class Ataque:
     # Trabajar sobre el objetivo
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _build_turret_at(self, c: Controller, target: Position):
+        """
+        Construye la torreta apropiada en target según el tipo de objetivo.
+        - objetivo_es_harvester_adj: siempre sentinel mirando al core enemigo.
+        - Si no, lógica original (gunner/sentinel según distancia al core).
+        Limpia el estado de objetivo al terminar.
+        """
+        if self.enemy_core_pos is not None:
+            dir_to_enemy = target.direction_to(self.enemy_core_pos)
+        else:
+            dir_to_enemy = Direction.NORTH
+
+        built = False
+
+        if self.objetivo_es_harvester_adj:
+            # Siempre sentinel mirando al core enemigo
+            if c.can_build_sentinel(target, dir_to_enemy):
+                c.build_sentinel(target, dir_to_enemy)
+                built = True
+            else:
+                # Intentar todas las direcciones como fallback
+                for d in _ALL_DIRS:
+                    if c.can_build_sentinel(target, d):
+                        c.build_sentinel(target, d)
+                        built = True
+                        break
+        elif self.enemy_core_pos is not None:
+            dist_to_enemy = target.distance_squared(self.enemy_core_pos)
+            if dist_to_enemy <= 32 and dist_to_enemy > 13:
+                if c.can_build_sentinel(target, dir_to_enemy):
+                    c.build_sentinel(target, dir_to_enemy)
+                    built = True
+            else:
+                if c.can_build_gunner(target, dir_to_enemy):
+                    c.build_gunner(target, dir_to_enemy)
+                    built = True
+        else:
+            if c.can_build_gunner(target, dir_to_enemy):
+                c.build_gunner(target, dir_to_enemy)
+                built = True
+            else:
+                for d in _ALL_DIRS:
+                    if c.can_build_gunner(target, d):
+                        c.build_gunner(target, d)
+                        built = True
+                        break
+
+        if built:
+            self.objetivo = None
+            self.pendiente_torreta = False
+            self.objetivo_es_destino_libre = False
+            self.objetivo_es_harvester_adj = False
+
     def _work_objetivo(self, c: Controller):
         current = c.get_position()
         target = self.objetivo
@@ -369,16 +503,20 @@ class Ataque:
 
         bid = c.get_tile_building_id(target)
 
+        # Ya hay una torreta aliada ahí: objetivo cumplido
         if bid is not None and c.get_team(bid) == c.get_team() \
                 and c.get_entity_type(bid) in _TURRET_TYPES:
             self.objetivo = None
             self.pendiente_torreta = False
             self.objetivo_es_destino_libre = False
+            self.objetivo_es_harvester_adj = False
             return
 
+        # La casilla está vacía (o solo tiene road) → colocar torreta
         if bid is None or (bid is not None and c.get_team(bid) == c.get_team()
                            and c.get_entity_type(bid) not in _TURRET_TYPES):
             if bid is not None and c.get_team(bid) == c.get_team():
+                # Hay un edificio aliado que no es torreta (p.ej. road): destruirlo
                 if c.can_destroy(target):
                     c.destroy(target)
                 return
@@ -398,42 +536,10 @@ class Ataque:
                 self._navigate_to(c, target)
                 return
 
-            if self.enemy_core_pos is not None:
-                dir_to_enemy = target.direction_to(self.enemy_core_pos)
-            else:
-                dir_to_enemy = Direction.NORTH
-            
-            built = False
-            #comprobar si está en rango de que el sentinel llega a la base pero gunner no, entonces construir sentinel
-            if self.enemy_core_pos is not None:
-                dist_to_enemy = target.distance_squared(self.enemy_core_pos)
-                if dist_to_enemy <= 32 and dist_to_enemy > 13: # rango de ataque del sentinel pero no llega el gunner
-                    dir_to_enemy = target.direction_to(self.enemy_core_pos)
-                    if c.can_build_sentinel(target, dir_to_enemy):
-                        c.build_sentinel(target, dir_to_enemy)
-                        built = True
-                else:
-                    if c.can_build_gunner(target, dir_to_enemy):
-                        c.build_gunner(target, dir_to_enemy)
-                        built = True
-
-            
-            elif c.can_build_gunner(target, dir_to_enemy):
-                c.build_gunner(target, dir_to_enemy)
-                built = True
-            else:
-                for d in _ALL_DIRS:
-                    if c.can_build_gunner(target, d):
-                        c.build_gunner(target, d)
-                        built = True
-                        break
-
-            if built:
-                self.objetivo = None
-                self.pendiente_torreta = False
-                self.objetivo_es_destino_libre = False
+            self._build_turret_at(c, target)
             return
 
+        # Hay un edificio enemigo: ir encima y atacarlo
         if current == target:
             if c.can_fire(target):
                 c.fire(target)
