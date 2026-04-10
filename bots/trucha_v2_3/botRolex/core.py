@@ -17,7 +17,7 @@ def run_core(self, c: Controller):
 
     limite = c.get_foundry_cost()[0] + c.get_builder_bot_cost()[0]
 
-    if limite <= recursos[0] and c.get_current_round() >= 100: 
+    if limite <= recursos[0] and recursos[0] >= 150 and c.get_current_round() >= 100: 
         spawnBuilder(c)
         self.num_spawned += 1
     
