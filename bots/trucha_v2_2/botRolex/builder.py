@@ -167,7 +167,7 @@ class Harvester:
             # mode 2: go home (Rojo)
             # mode 3: revisar estructura (Naranja)
             # mode 4: conveyor mode (Azul Oscuro)
-            # mode 5: gunner junto con conveyors (Rosa)
+            # mode 5: (Rosa)
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
         self.check_pos = None
