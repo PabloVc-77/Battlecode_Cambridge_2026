@@ -961,7 +961,7 @@ class Harvester:
             if c.get_team(eid) == c.get_team():
                 continue
             et = c.get_entity_type(eid)
-            if et in (EntityType.BUILDER_BOT,) + turret_types:
+            if et in turret_types:
                 return c.get_position(eid)
         return None
 
