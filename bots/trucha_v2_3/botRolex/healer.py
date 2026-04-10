@@ -1,10 +1,6 @@
 from cambc import Controller, Direction, EntityType, Environment, Position
 import bignav_a_mem as bugnav
-from botRolex.helper.layout_defensivo import (
-    _is_in_bounds, BASE_LAYOUT,
-    rotate_offset, rotate_dir,
-    choose_rotation, build_rotated_layout, compute_layout_for_core,
-)
+from botRolex.helper.layout_defensivo import compute_layout_for_core
 
 HEAL_PRIORITY: dict[EntityType, int] = {
     EntityType.CORE:               0,
