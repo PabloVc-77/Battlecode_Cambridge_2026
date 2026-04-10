@@ -1,6 +1,10 @@
 from cambc import Controller, Direction, EntityType, Environment, Position
 import bignav_a_mem as bugnav
-from botRolex.helper.layout_defensivo import compute_layout_for_core
+from botRolex.helper.layout_defensivo import (
+    _is_in_bounds, BASE_LAYOUT,
+    rotate_offset, rotate_dir,
+    choose_rotation, build_rotated_layout, compute_layout_for_core,
+)
 
 HEAL_PRIORITY: dict[EntityType, int] = {
     EntityType.CORE:               0,
@@ -51,24 +55,25 @@ class Healer:
         self.going_forward = True
         self.patrol_index = 0
 
-        # P1: counter turret
+        # P1: counter turret (máxima prioridad)
+        # (estado gestionado por _run_counter_turret, vars debajo)
+
+        # P2: intercept enemy bot via splitter + sentinel
+        self._intercept_enemy_pos = None    # última pos vista del bot enemigo
+        self._intercept_splitter_pos = None # conveyor a convertir en splitter
+        self._intercept_splitter_dir = None # dirección del conveyor original
+        self._intercept_sentinel_pos = None # casilla donde poner el sentinel
+        self._intercept_sentinel_dir = None # dirección hacia el bot enemigo
+
+        # P2 (antiguo nombre, ahora P1): counter turret
         self._counter_target_pos = None
         self._counter_dir = None
         self._counter_enemy_turret = None
 
-        # P2: intercept enemy bot via splitter + sentinel
-        self._intercept_enemy_pos = None
-        self._intercept_splitter_pos = None
-        self._intercept_splitter_dir = None
-        self._intercept_sentinel_pos = None
-        self._intercept_sentinel_dir = None
-        # "allied" | "enemy" | None  — tipo de road a destruir antes del sentinel
-        self._intercept_sentinel_road = None
-
         # P3: broken chain
         self._broken_chain_reported = set()
 
-        # Layout defensivo
+        # Layout defensivo: posiciones reservadas donde no construir splitter/sentinel
         self.layout_positions: set[Position] = set()
 
         builds = c.get_nearby_buildings()
@@ -102,10 +107,6 @@ class Healer:
             for v in candidates:
                 if self._in_bounds(v) and c.get_tile_env(v) != Environment.WALL:
                     self.end_bridges.append(v)
-
-    # =========================================================================
-    # Helpers generales
-    # =========================================================================
 
     def _in_bounds(self, pos):
         return 0 <= pos.x < self.map_w and 0 <= pos.y < self.map_h
@@ -202,60 +203,23 @@ class Healer:
                 result.append(c.get_position(bid))
         return result
 
-    # =========================================================================
-    # P1 – Counter turret
-    # =========================================================================
-
-    def _update_counter_target(self, c, builds):
-        current = c.get_position()
-        enemy_turrets = self._get_enemy_turrets(c, builds)
-        if not enemy_turrets:
-            return
-        enemy_turrets.sort(key=lambda pos: current.distance_squared(pos))
-        for turret_pos in enemy_turrets:
-            fuente = self._find_next_in_chain(c, turret_pos, include_enemies=True)
-            if fuente is None:
+    def _has_allied_healer_nearby(self, c, target_pos):
+        my_id = c.get_id()
+        for uid in c.get_nearby_units():
+            if uid == my_id:
                 continue
-            self._counter_target_pos = fuente
-            self._counter_dir = fuente.direction_to(turret_pos)
-            self._counter_enemy_turret = turret_pos
-            return
-
-    def _run_counter_turret(self, c, builds):
-        current = c.get_position()
-        if self._counter_target_pos is not None:
-            if (not self._enemy_turret_still_alive(c, self._counter_enemy_turret)
-                    or self._counter_sentinel_done(c)):
-                self._counter_target_pos = None
-                self._counter_dir = None
-                self._counter_enemy_turret = None
-            else:
-                c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
-                done = self.construir(c, self._counter_target_pos,
-                                      EntityType.SENTINEL, self._counter_dir)
-                if done:
-                    self._counter_target_pos = None
-                    self._counter_dir = None
-                    self._counter_enemy_turret = None
+            if c.get_team(uid) != c.get_team():
+                continue
+            if c.get_entity_type(uid) != EntityType.BUILDER_BOT:
+                continue
+            if c.get_position(uid).distance_squared(target_pos) <= 2:
                 return True
-
-        self._update_counter_target(c, builds)
-        if self._counter_target_pos is not None:
-            c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
-            done = self.construir(c, self._counter_target_pos,
-                                  EntityType.SENTINEL, self._counter_dir)
-            if done:
-                self._counter_target_pos = None
-                self._counter_dir = None
-                self._counter_enemy_turret = None
-            return True
         return False
 
-    # =========================================================================
-    # P2 – Intercept enemy bot (splitter + sentinel)
-    # =========================================================================
+    # ── P2 helpers: intercept enemy bot (splitter + sentinel) ───────────────
 
-    def _get_nearby_enemy_bots(self, c: Controller):
+    def _get_nearby_enemy_bots(self, c):
+        """Devuelve lista de (dist², pos) de bots enemigos en visión, ordenada."""
         current = c.get_position()
         result = []
         for uid in c.get_nearby_units():
@@ -269,14 +233,14 @@ class Healer:
         return result
 
     def _enemy_bot_still_present(self, c, enemy_pos):
+        """True si hay un bot enemigo en enemy_pos o en alguna casilla adyacente visible."""
         if not c.is_in_vision(enemy_pos):
             return False
         uid = c.get_tile_builder_bot_id(enemy_pos)
         if uid is not None and c.get_team(uid) != c.get_team():
             return True
         for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST,
-                  Direction.NORTHEAST, Direction.NORTHWEST,
-                  Direction.SOUTHEAST, Direction.SOUTHWEST]:
+                  Direction.NORTHEAST, Direction.NORTHWEST, Direction.SOUTHEAST, Direction.SOUTHWEST]:
             adj = enemy_pos.add(d)
             if not self._in_bounds(adj) or not c.is_in_vision(adj):
                 continue
@@ -285,94 +249,158 @@ class Healer:
                 return True
         return False
 
-    def _get_splitter_dir_from_feeder(self, c: Controller, conv_pos: Position, conv_dir: Direction):
+    def _find_best_conveyor_for_intercept(self, c, enemy_pos):
         """
-        Devuelve (splitter_dir, feeder_type) donde feeder_type es
-        'harvester', 'conveyor', 'bridge', 'splitter' o None.
+        Busca el conveyor/armoured_conveyor aliado más cercano a enemy_pos
+        que no esté en el layout defensivo.
 
-        Lógica:
-          - Harvester adyacente aliado (cardinal):
-              splitter_dir = harvester_pos.direction_to(conv_pos)
-          - Conveyor/armoured_conveyor aliado apuntando a conv_pos:
-              splitter_dir = dirección de ese feeder
-          - Bridge/splitter aliado apuntando a conv_pos:
-              splitter_dir = conv_dir (mantener original)
-          - Sin feeder visible:
-              splitter_dir = conv_dir
+        Devuelve (conv_pos, splitter_dir, feeder_is_bridge) donde:
+          - conv_pos: posición del conveyor a reemplazar
+          - splitter_dir: dirección en la que debe apuntar el splitter,
+            calculada mirando quién alimenta al conveyor:
+              · Si el feeder es otro conveyor/armoured_conveyor aliado,
+                el splitter apunta en la misma dirección que ese feeder
+                (así la fuente queda "detrás" del splitter).
+              · Si el feeder es un bridge o no se encuentra, se mantiene
+                la dirección original del conveyor.
+          - feeder_is_bridge: True si la fuente detectada es un bridge
+
+        Prioridad: conveyors con recurso almacenado > conveyors vacíos.
+        Descarta conveyors donde no se puede construir un sentinel alrededor.
+        Devuelve None si no hay candidatos válidos.
         """
-        # 1. Harvester adyacente (cardinal) tiene prioridad
-        for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
-            adj = conv_pos.add(d)
-            if not self._in_bounds(adj) or not c.is_in_vision(adj):
-                continue
-            bid = c.get_tile_building_id(adj)
-            if bid is None:
-                continue
+        best_with_resource = None
+        best_with_resource_dist = 10**9
+        best_empty = None
+        best_empty_dist = 10**9
 
-            if (c.get_entity_type(bid) == EntityType.HARVESTER and c.get_tile_env(adj) == Environment.ORE_TITANIUM):
-                return adj.direction_to(conv_pos), 'harvester'
-            
-        # 2. Edificios de transporte aliados cuyo output apunta a conv_pos
         for bid in c.get_nearby_buildings():
             if c.get_team(bid) != c.get_team():
                 continue
             etype = c.get_entity_type(bid)
-            if etype not in TRANSPORT_TYPES:
+            if etype not in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
                 continue
+            pos = c.get_position(bid)
+
+            # No construir en posiciones del layout defensivo
+            if pos in self.layout_positions:
+                continue
+
+            try:
+                conv_dir = c.get_direction(bid)
+            except Exception:
+                continue
+
+            # Determinar la dirección correcta del splitter consultando el feeder
+            splitter_dir, feeder_is_bridge = self._get_splitter_dir_from_feeder(
+                c, pos, conv_dir
+            )
+
+            # Verificar que se puede construir un sentinel alrededor de este conveyor
+            sentinel_pos, _ = self._find_sentinel_spot_for_splitter(
+                c, pos, splitter_dir, enemy_pos
+            )
+            if sentinel_pos is None:
+                continue  # Descartar conveyor si no hay sitio para sentinel
+
+            dist = pos.distance_squared(enemy_pos)
+
+            has_resource = c.get_stored_resource(bid) is not None
+            entry = (pos, splitter_dir, feeder_is_bridge)
+            if has_resource:
+                if dist < best_with_resource_dist:
+                    best_with_resource_dist = dist
+                    best_with_resource = entry
+            else:
+                if dist < best_empty_dist:
+                    best_empty_dist = dist
+                    best_empty = entry
+
+        return best_with_resource if best_with_resource is not None else best_empty
+
+    def _get_splitter_dir_from_feeder(self, c, conv_pos, conv_dir):
+        """
+        Dado un conveyor en conv_pos con dirección conv_dir, busca quién lo
+        alimenta (el edificio cuyo output apunta a conv_pos) y devuelve
+        (splitter_dir, feeder_is_bridge):
+
+          - Si el feeder es un conveyor/armoured_conveyor aliado:
+              splitter_dir = dirección de ese feeder
+              (el splitter hereda la dirección de su alimentador, así la
+               fuente queda en la entrada trasera del splitter)
+          - Si el feeder es un bridge aliado, o no se encuentra feeder:
+              splitter_dir = conv_dir  (mantener dirección original)
+              feeder_is_bridge = True si era bridge, False si no había feeder
+        """
+        for bid in c.get_nearby_buildings():
+            if c.get_team(bid) != c.get_team():
+                continue
+            etype = c.get_entity_type(bid)
             pos = c.get_position(bid)
             if pos == conv_pos:
                 continue
-            if pos in self.layout_positions:
+
+            # Caso especial: Harvester como fuente de suministros
+            if etype == EntityType.HARVESTER:
+                # Comprobar si el conveyor está adyacente al harvester
+                if pos.distance_squared(conv_pos) <= 2:
+                    # El splitter apunta desde el harvester hacia el splitter
+                    return pos.direction_to(conv_pos), False
                 continue
+
+            if etype not in TRANSPORT_TYPES:
+                continue
+
+            # Comprobar si este edificio apunta a conv_pos
             if etype == EntityType.BRIDGE:
                 try:
                     target = c.get_bridge_target(bid)
                 except Exception:
                     continue
                 if target == conv_pos:
-                    return conv_dir, 'bridge'
+                    # Feeder es un bridge: mantener dirección original
+                    return conv_dir, True
             elif etype == EntityType.SPLITTER:
                 try:
                     d = c.get_direction(bid)
                 except Exception:
                     continue
-                if (pos.add(d) == conv_pos):
-                    pass
-                elif pos.add(d.rotate_left().rotate_left()) == conv_pos:
-                    d = d.rotate_left().rotate_left()
-                elif pos.add(d.rotate_right().rotate_right()) == conv_pos:
-                    d = d.rotate_right().rotate_right()
-                else:
-                    continue
-                
-                return d, 'splitter'
+                if (pos.add(d) == conv_pos
+                        or pos.add(d.rotate_left().rotate_left()) == conv_pos
+                        or pos.add(d.rotate_right().rotate_right()) == conv_pos):
+                    # Feeder es un splitter: mantener dirección original (caso raro)
+                    return conv_dir, False
             else:  # CONVEYOR, ARMOURED_CONVEYOR
                 try:
                     d = c.get_direction(bid)
                 except Exception:
                     continue
                 if pos.add(d) == conv_pos:
-                    return d, 'conveyor'
+                    # Feeder es un conveyor: el splitter apunta igual que el feeder
+                    return d, False
 
-        return conv_dir, None
+        # No se encontró feeder visible: mantener dirección original
+        return conv_dir, False
 
-    def _find_sentinel_spot(self, c: Controller, splitter_pos: Position, splitter_dir: Direction, enemy_pos: Position):
+    def _find_sentinel_spot_for_splitter(self, c, splitter_pos, splitter_dir, enemy_pos):
         """
-        Busca casilla válida para el sentinel entre: izquierda, derecha y
-        delante del splitter.
+        Busca una casilla a izquierda o derecha del splitter (90° del eje
+        de transporte) donde colocar el sentinel.
 
-        Válida si:
-          - En bounds y en visión
-          - No en layout defensivo
-          - No pared ni ore
-          - No transporte aliado (no romper cadena)
-          - Vacía, o road (propia → destroy, enemiga → fire), o sentinel aliado
+        Reglas de exclusión (además de paredes/ores/fuera de visión):
+          - No usar casillas del layout defensivo
+          - No usar casillas que contengan conveyor, armoured_conveyor o bridge
+            aliados (no queremos romper nuestra propia cadena)
 
-        Devuelve (pos, dir_to_enemy, road_type) donde road_type es
-        'allied', 'enemy' o None. Si ninguna es válida devuelve (None, None, None).
+        Permite construir en casillas con ROAD:
+          - Si es aliada → destroy + construir
+          - Si es enemiga → fire + construir
+
+        Si ya existe un sentinel aliado en uno de esos lados (válido), lo reutiliza.
+        Devuelve (pos, dir_to_enemy) o (None, None).
         """
-        left_dir  = splitter_dir.rotate_left().rotate_left()
-        right_dir = splitter_dir.rotate_right().rotate_right()
+        left_dir  = splitter_dir.rotate_left().rotate_left()   # 90° CCW
+        right_dir = splitter_dir.rotate_right().rotate_right()  # 90° CW
         front_dir = splitter_dir
 
         for side_dir in (left_dir, right_dir, front_dir):
@@ -382,89 +410,50 @@ class Healer:
             if candidate in self.layout_positions:
                 continue
             env = c.get_tile_env(candidate)
-            if env in (Environment.WALL, Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
+            if env == Environment.WALL:
                 continue
-
-            # Girar 45º si sentinel apuntase a su fuente de recursos
-            dir_to_enemy = candidate.direction_to(enemy_pos)
-            not_valid = candidate.direction_to(splitter_pos)
-            if dir_to_enemy == not_valid:
-                dir_to_enemy = dir_to_enemy.rotate_left()
-            
             bid = c.get_tile_building_id(candidate)
+            if bid is not None:
+                etype = c.get_entity_type(bid)
+                team = c.get_team(bid)
+                # Reutilizar sentinel aliado existente
+                if etype == EntityType.SENTINEL and team == c.get_team():
+                    return candidate, candidate.direction_to(enemy_pos)
+                # Permitir construir sobre ROAD (se destruirá/disparará luego)
+                if etype == EntityType.ROAD:
+                    return candidate, candidate.direction_to(enemy_pos)
+                # No ocupar casillas de transporte aliado
+                if team == c.get_team() and etype in (
+                    EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.BRIDGE
+                ):
+                    continue
+                # Cualquier otro edificio ocupa la casilla
+                if not c.is_tile_empty(candidate):
+                    continue
+            return candidate, candidate.direction_to(enemy_pos)
 
-            if bid is None:
-                return candidate, dir_to_enemy, None
+        return None, None
 
-            etype = c.get_entity_type(bid)
-            team  = c.get_team(bid)
-
-            # Sentinel aliado existente: reutilizar
-            if etype == EntityType.SENTINEL and team == c.get_team():
-                return candidate, dir_to_enemy, None
-
-            # Transporte aliado: no tocar
-            if team == c.get_team() and etype in (
-                EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.BRIDGE
-            ):
-                continue
-
-            # Road: aceptar, hay que destruirla primero
-            if etype == EntityType.ROAD:
-                road_type = 'allied' if team == c.get_team() else 'enemy'
-                return candidate, dir_to_enemy, road_type
-
-            # Otro edificio: no válido
-            continue
-
-        return None, None, None
-
-    def _find_best_conveyor_for_intercept(self, c, enemy_pos):
+    def _intercept_setup(self, c, enemy_pos):
         """
-        Busca el mejor conveyor/armoured_conveyor aliado para la estructura
-        splitter + sentinel. Itera candidatos (con recurso primero, luego vacíos,
-        ambos ordenados por distancia al bot) y descarta aquellos para los que
-        no existe ninguna casilla válida de sentinel.
-
-        Devuelve (conv_pos, splitter_dir, sentinel_pos, sentinel_dir, road_type)
-        o None si no hay candidato válido.
+        Dado un bot enemigo en enemy_pos, calcula y guarda los objetivos
+        de splitter y sentinel. Devuelve True si se pudo calcular todo.
         """
-        candidates_with = []
-        candidates_empty = []
+        result = self._find_best_conveyor_for_intercept(c, enemy_pos)
+        if result is None:
+            return False
+        splitter_pos, splitter_dir, _feeder_is_bridge = result
 
-        for bid in c.get_nearby_buildings():
-            if c.get_team(bid) != c.get_team():
-                continue
-            etype = c.get_entity_type(bid)
-            if etype not in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
-                continue
-            pos = c.get_position(bid)
-            if pos in self.layout_positions:
-                continue
-            try:
-                conv_dir = c.get_direction(bid)
-            except Exception:
-                continue
-            dist = pos.distance_squared(enemy_pos)
-            splitter_dir, _ = self._get_splitter_dir_from_feeder(c, pos, conv_dir)
-            entry = (dist, pos, splitter_dir)
-            if c.get_stored_resource(bid) is not None:
-                candidates_with.append(entry)
-            else:
-                candidates_empty.append(entry)
+        sentinel_pos, sentinel_dir = self._find_sentinel_spot_for_splitter(
+            c, splitter_pos, splitter_dir, enemy_pos
+        )
 
-        candidates_with.sort()
-        candidates_empty.sort()
-
-        for _, conv_pos, splitter_dir in candidates_with + candidates_empty:
-            s_pos, s_dir, road_type = self._find_sentinel_spot(
-                c, conv_pos, splitter_dir, enemy_pos
-            )
-            if s_pos is None:
-                continue  # No hay spot válido: descartar este conveyor
-            return conv_pos, splitter_dir, s_pos, s_dir, road_type
-
-        return None
+        self._intercept_enemy_pos = enemy_pos
+        self._intercept_splitter_pos = splitter_pos
+        self._intercept_splitter_dir = splitter_dir
+        self._intercept_sentinel_pos = sentinel_pos
+        self._intercept_sentinel_dir = sentinel_dir
+        return True
 
     def _intercept_clear(self):
         self._intercept_enemy_pos = None
@@ -472,40 +461,34 @@ class Healer:
         self._intercept_splitter_dir = None
         self._intercept_sentinel_pos = None
         self._intercept_sentinel_dir = None
-        self._intercept_sentinel_road = None
-
-    def _intercept_setup(self, c, enemy_pos):
-        result = self._find_best_conveyor_for_intercept(c, enemy_pos)
-        if result is None:
-            return False
-        conv_pos, splitter_dir, s_pos, s_dir, road_type = result
-        self._intercept_enemy_pos = enemy_pos
-        self._intercept_splitter_pos = conv_pos
-        self._intercept_splitter_dir = splitter_dir
-        self._intercept_sentinel_pos = s_pos
-        self._intercept_sentinel_dir = s_dir
-        self._intercept_sentinel_road = road_type
-        return True
 
     def _run_intercept(self, c):
         """
-        P2: interceptar bot enemigo con splitter + sentinel.
-        Persistente hasta que el bot desaparezca o la instalación esté completa.
+        P2: interceptar bot enemigo.
+        Estrategia:
+          1. Convertir el conveyor aliado más cercano al bot en un splitter
+             (misma dirección). El splitter redirigirá recursos al sentinel.
+          2. Colocar un sentinel a izquierda o derecha del splitter apuntando
+             a la última posición vista del bot.
+        El objetivo es persistente: no se limpia hasta que el bot desaparezca
+        de visión o se complete la instalación.
+        Devuelve True si hay trabajo activo.
         """
-        # Verificar objetivo activo
-        if self._intercept_enemy_pos is not None:
-            if not self._enemy_bot_still_present(c, self._intercept_enemy_pos):
-                self._intercept_clear()
-            else:
-                # Actualizar dirección del sentinel con posición actual del bot
+        # Verificar si el objetivo activo sigue siendo válido
+        posicion_bot = self._intercept_enemy_pos
+        if posicion_bot is not None:
+            #if not self._enemy_bot_still_present(c, self._intercept_enemy_pos):
+              # self._intercept_clear()
+            #else:
+                # Actualizar dirección del sentinel hacia la posición actual del bot
                 nearby_bots = self._get_nearby_enemy_bots(c)
                 if nearby_bots:
-                    _, cur_enemy = nearby_bots[0]
-                    self._intercept_enemy_pos = cur_enemy
+                    _, current_enemy_pos = nearby_bots[0]
+                    self._intercept_enemy_pos = current_enemy_pos
                     if self._intercept_sentinel_pos is not None:
-                        self._intercept_sentinel_dir = \
-                            self._intercept_sentinel_pos.direction_to(cur_enemy)
-
+                        self._intercept_sentinel_dir = self._intercept_sentinel_pos.direction_to(current_enemy_pos)
+                else:
+                    self._intercept_sentinel_dir = posicion_bot.direction_to(posicion_bot)
         # Sin objetivo: buscar uno nuevo
         if self._intercept_enemy_pos is None:
             nearby_bots = self._get_nearby_enemy_bots(c)
@@ -517,118 +500,104 @@ class Healer:
 
         current = c.get_position()
 
-        # ── Paso 1: splitter ─────────────────────────────────────────────────
+        # ── Paso 1: splitter ──────────────────────────────────────────────────
+        splitter_done = False
         if self._intercept_splitter_pos is not None:
-            spl_pos = self._intercept_splitter_pos
-            c.draw_indicator_dot(spl_pos, 255, 140, 0)
-
-            # Guard: no consultar la casilla si está fuera de visión
-            if not c.is_in_vision(spl_pos):
-                d = self.navegador.moveTo(c, spl_pos, four_dirs=False)
+            c.draw_indicator_dot(self._intercept_splitter_pos, 255, 140, 0)
+            # Proteger contra posición fuera de visión
+            if not c.is_in_vision(self._intercept_splitter_pos):
+                # Acercarse para tener visión
+                d = self.navegador.moveTo(c, self._intercept_splitter_pos, four_dirs=False)
                 nxt = current.add(d)
                 if c.can_build_road(nxt):
                     c.build_road(nxt)
                 self._try_move(c, d)
                 return True
-
-            bid = c.get_tile_building_id(spl_pos)
-            splitter_done = (bid is not None
-                             and c.get_entity_type(bid) == EntityType.SPLITTER
-                             and c.get_team(bid) == c.get_team())
-
-            if not splitter_done:
-                if bid is not None and c.get_team(bid) == c.get_team():
-                    # Conveyor aliado: destruir primero
-                    if current.distance_squared(spl_pos) > 2:
-                        d = self.navegador.moveTo(c, spl_pos, four_dirs=False)
-                        nxt = current.add(d)
-                        if c.can_build_road(nxt):
-                            c.build_road(nxt)
-                        self._try_move(c, d)
-                        return True
-                    # Solo destruir si tenemos recursos para poner el splitter en el mismo turno
-                    titanium = c.get_global_resources()[0]
-                    precio = c.get_splitter_cost()[0]
-                    if titanium >= precio and c.can_destroy(spl_pos):
-                        c.destroy(spl_pos)
-                # Casilla vacía: construir splitter
-                self._construir_splitter(c, spl_pos, self._intercept_splitter_dir)
-                return True
-
-        # ── Paso 2: sentinel ─────────────────────────────────────────────────
-        if self._intercept_sentinel_pos is None or self._intercept_sentinel_dir is None:
-            return True
-
-        sen_pos = self._intercept_sentinel_pos
-        c.draw_indicator_dot(sen_pos, 255, 0, 0)
-
-        # Guard: no consultar si está fuera de visión
-        if not c.is_in_vision(sen_pos):
-            d = self.navegador.moveTo(c, sen_pos, four_dirs=False)
-            nxt = current.add(d)
-            if c.can_build_road(nxt):
-                c.build_road(nxt)
-            self._try_move(c, d)
-            return True
-
-        bid = c.get_tile_building_id(sen_pos)
-        sentinel_done = (bid is not None
-                         and c.get_entity_type(bid) == EntityType.SENTINEL
-                         and c.get_team(bid) == c.get_team())
-
-        if sentinel_done:
-            return True
-
-        # Destruir road si hace falta antes de construir
-        if self._intercept_sentinel_road is not None and bid is not None:
-            etype = c.get_entity_type(bid)
-            if etype == EntityType.ROAD:
-                if self._intercept_sentinel_road == 'allied':
-                    if current.distance_squared(sen_pos) > 2:
-                        d = self.navegador.moveTo(c, sen_pos, four_dirs=False)
-                        nxt = current.add(d)
-                        if c.can_build_road(nxt):
-                            c.build_road(nxt)
-                        self._try_move(c, d)
-                        return True
-                    if c.can_destroy(sen_pos):
-                        c.destroy(sen_pos)
-                    return True
-                else:  # enemy road
-                    if current == sen_pos:
-                        if c.can_fire(sen_pos):
-                            c.fire(sen_pos)
-                        if c.get_tile_building_id(sen_pos) is None:
-                            self._intercept_sentinel_road = None
-                            for d in [Direction.NORTH, Direction.EAST,
-                                      Direction.SOUTH, Direction.WEST]:
-                                if self._try_move(c, d):
-                                    break
-                    else:
-                        if c.is_tile_passable(sen_pos):
-                            d = self.navegador.moveTo(c, sen_pos, four_dirs=False)
-                            nxt = current.add(d)
-                            if c.can_build_road(nxt):
-                                c.build_road(nxt)
-                            self._try_move(c, d)
-                    return True
+            bid = c.get_tile_building_id(self._intercept_splitter_pos)
+            if (bid is not None
+                    and c.get_entity_type(bid) == EntityType.SPLITTER
+                    and c.get_team(bid) == c.get_team()):
+                splitter_done = True
             else:
-                # Ya no hay road (fue destruida): limpiar flag
-                self._intercept_sentinel_road = None
+                # Destruir el conveyor existente y construir splitter
+                if bid is not None and c.get_team(bid) == c.get_team():
+                    # Acercarse si hace falta para poder destruir
+                    if current.distance_squared(self._intercept_splitter_pos) > 2:
+                        d = self.navegador.moveTo(c, self._intercept_splitter_pos, four_dirs=False)
+                        nxt = current.add(d)
+                        if c.can_build_road(nxt):
+                            c.build_road(nxt)
+                        self._try_move(c, d)
+                        return True
+                    if c.can_destroy(self._intercept_splitter_pos):
+                        c.destroy(self._intercept_splitter_pos)
+                    return True  # El siguiente turno la casilla estará vacía
+                # Casilla vacía: construir splitter
+                splitter_done = self.construir_splitter(
+                    c, self._intercept_splitter_pos, self._intercept_splitter_dir
+                )
 
-        # Construir sentinel
-        self.construir(c, sen_pos, EntityType.SENTINEL, self._intercept_sentinel_dir)
+        # ── Paso 2: sentinel ──────────────────────────────────────────────────
+        if self._intercept_sentinel_pos is not None and self._intercept_sentinel_dir is not None:
+            c.draw_indicator_dot(self._intercept_sentinel_pos, 255, 0, 0)
+            # Proteger contra posición fuera de visión
+            if not c.is_in_vision(self._intercept_sentinel_pos):
+                d = self.navegador.moveTo(c, self._intercept_sentinel_pos, four_dirs=False)
+                nxt = current.add(d)
+                if c.can_build_road(nxt):
+                    c.build_road(nxt)
+                self._try_move(c, d)
+                return True
+            bid = c.get_tile_building_id(self._intercept_sentinel_pos)
+            sentinel_done = (
+                bid is not None
+                and c.get_entity_type(bid) == EntityType.SENTINEL
+                and c.get_team(bid) == c.get_team()
+            )
+            if not sentinel_done:
+                # Si hay un ROAD en la casilla, destruir/fire primero
+                if bid is not None:
+                    etype = c.get_entity_type(bid)
+                    if etype == EntityType.ROAD:
+                        team = c.get_team(bid)
+                        if team == c.get_team():
+                            # ROAD aliada → destroy
+                            if current.distance_squared(self._intercept_sentinel_pos) > 2:
+                                d = self.navegador.moveTo(c, self._intercept_sentinel_pos, four_dirs=False)
+                                nxt = current.add(d)
+                                if c.can_build_road(nxt):
+                                    c.build_road(nxt)
+                                self._try_move(c, d)
+                                return True
+                            if c.can_destroy(self._intercept_sentinel_pos):
+                                c.destroy(self._intercept_sentinel_pos)
+                            return True
+                        else:
+                            # ROAD enemiga → fire
+                            if c.can_fire(self._intercept_sentinel_pos):
+                                c.fire(self._intercept_sentinel_pos)
+                            return True
+                self.construir(
+                    c, self._intercept_sentinel_pos,
+                    EntityType.SENTINEL, self._intercept_sentinel_dir
+                )
+                self._intercept_clear()
+
         return True
 
-    def _construir_splitter(self, c, objetivo, direccion):
+    def construir_splitter(self, c, objetivo, direccion):
+        """
+        Igual que construir() pero para splitters. Devuelve True cuando
+        hay un splitter aliado con la dirección correcta en objetivo.
+        """
         current = c.get_position()
-        if not c.is_in_vision(objetivo):
-            return False
         bid = c.get_tile_building_id(objetivo)
         if bid is not None:
-            if (c.get_entity_type(bid) == EntityType.SPLITTER
-                    and c.get_team(bid) == c.get_team()):
+            etype = c.get_entity_type(bid)
+            team = c.get_team(bid)
+            if etype == EntityType.SPLITTER and team == c.get_team():
                 return True
+            # Cualquier otro edificio: no podemos construir aquí
             return False
         if current.distance_squared(objetivo) > 2:
             d = self.navegador.moveTo(c, objetivo, four_dirs=False)
@@ -649,9 +618,51 @@ class Healer:
             return True
         return False
 
-    # =========================================================================
-    # P3 – Broken chain detection
-    # =========================================================================
+    # ── P2 helpers ──────────────────────────────────────────────────────────
+
+    def _update_counter_target(self, c, builds):
+        current = c.get_position()
+        enemy_turrets = self._get_enemy_turrets(c, builds)
+        if not enemy_turrets:
+            return
+        enemy_turrets.sort(key=lambda pos: current.distance_squared(pos))
+        for turret_pos in enemy_turrets:
+            fuente = self._find_next_in_chain(c, turret_pos, include_enemies=True)
+            if fuente is None:
+                continue
+            self._counter_target_pos = fuente
+            self._counter_dir = fuente.direction_to(turret_pos)
+            self._counter_enemy_turret = turret_pos
+            return
+
+    def _run_counter_turret(self, c, builds):
+        current = c.get_position()
+        if self._counter_target_pos is not None:
+            if not self._enemy_turret_still_alive(c, self._counter_enemy_turret) or self._counter_sentinel_done(c):
+                self._counter_target_pos = None
+                self._counter_dir = None
+                self._counter_enemy_turret = None
+            else:
+                c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
+                done = self.construir(c, self._counter_target_pos, EntityType.SENTINEL, self._counter_dir)
+                if done:
+                    self._counter_target_pos = None
+                    self._counter_dir = None
+                    self._counter_enemy_turret = None
+                return True
+
+        self._update_counter_target(c, builds)
+        if self._counter_target_pos is not None:
+            c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
+            done = self.construir(c, self._counter_target_pos, EntityType.SENTINEL, self._counter_dir)
+            if done:
+                self._counter_target_pos = None
+                self._counter_dir = None
+                self._counter_enemy_turret = None
+            return True
+        return False
+
+    # ── P3: broken chain detection ───────────────────────────────────────────
 
     def _detect_broken_chain(self, c):
         for bid in c.get_nearby_buildings():
@@ -681,8 +692,7 @@ class Healer:
                 continue
             dest_bid = c.get_tile_building_id(dest)
             if dest_bid is not None:
-                if (c.get_team(dest_bid) == c.get_team()
-                        and c.get_entity_type(dest_bid) in TRANSPORT_TYPES):
+                if c.get_team(dest_bid) == c.get_team() and c.get_entity_type(dest_bid) in TRANSPORT_TYPES:
                     self._broken_chain_reported.discard(dest)
                     continue
                 if c.get_team(dest_bid) == c.get_team():
@@ -693,9 +703,7 @@ class Healer:
             c.draw_indicator_dot(dest, 255, 128, 0)
             return
 
-    # =========================================================================
-    # Patrulla
-    # =========================================================================
+    # ── Patrulla ─────────────────────────────────────────────────────────────
 
     def _start_new_patrol(self, c):
         if not self.end_bridges:
@@ -757,13 +765,15 @@ class Healer:
             c.build_road(current.add(siguiente_dir))
         self._try_move(c, siguiente_dir)
 
-    # =========================================================================
-    # Construcción genérica
-    # =========================================================================
+    # ── Construcción genérica ────────────────────────────────────────────────
 
     def construir(self, c, objetivo, edificio, direccion=Direction.CENTRE):
         current = c.get_position()
-        building_id = c.get_tile_building_id(objetivo)
+        if c.is_in_vision(objetivo):
+            building_id = c.get_tile_building_id(objetivo)
+        else:
+            building_id = None
+
         if building_id is not None:
             entity = c.get_entity_type(building_id)
             team = c.get_team(building_id)
@@ -791,11 +801,10 @@ class Healer:
                     self._try_move(c, d)
                 if c.can_fire(objetivo):
                     c.fire(objetivo)
+                
                 if c.get_tile_building_id(objetivo) is None:
-                    for d in [Direction.NORTH, Direction.EAST,
-                              Direction.SOUTH, Direction.WEST,
-                              Direction.NORTHEAST, Direction.SOUTHEAST,
-                              Direction.SOUTHWEST, Direction.NORTHWEST]:
+                    for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST,
+                              Direction.NORTHEAST, Direction.SOUTHEAST, Direction.SOUTHWEST, Direction.NORTHWEST]:
                         adj = objetivo.add(d)
                         if self._in_bounds(adj):
                             if c.can_build_road(adj):
@@ -805,6 +814,7 @@ class Healer:
                 return False
             else:
                 return True
+            
         if current.distance_squared(objetivo) > 2:
             d = self.navegador.moveTo(c, objetivo, four_dirs=False)
             nxt = current.add(d)
@@ -829,9 +839,7 @@ class Healer:
                 return True
         return False
 
-    # =========================================================================
-    # run
-    # =========================================================================
+    # ── run ──────────────────────────────────────────────────────────────────
 
     def run(self, c):
         current = c.get_position()
@@ -841,15 +849,20 @@ class Healer:
 
         builds = c.get_nearby_buildings()
 
-        # P1: torreta enemiga → sentinel sobre su fuente
+        # ── P1: torreta enemiga existente → sentinel sobre su fuente ─────────
         if self._run_counter_turret(c, builds):
+            #self._detect_broken_chain(c)
             return
 
-        # P2: bot enemigo en visión → splitter + sentinel
+        # ── P2: bot enemigo en visión → splitter + sentinel ───────────────────
         if self._run_intercept(c):
+            #self._detect_broken_chain(c)
             return
 
-        # P4: curar edificios aliados dañados
+        # ── P3: detección de huecos en cadena (markers, sin movimiento) ───────
+        #self._detect_broken_chain(c)
+
+        # ── P4: curar edificios aliados dañados (sin filtro de cobertura) ─────
         damaged = self._get_damaged_targets(c)
         if damaged:
             target_pos = damaged[0][2]
@@ -869,6 +882,6 @@ class Healer:
                     c.build_road(current.add(siguiente_dir))
                 self._try_move(c, siguiente_dir)
         else:
-            # P5: patrullar
+            # ── P5: patrullar ─────────────────────────────────────────────────
             c.draw_indicator_dot(current, 0, 200, 255)
             self._patrol_move(c)
