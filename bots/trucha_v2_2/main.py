@@ -21,7 +21,7 @@ from botRolex.builderTorretas import Torreta
 from botRolex.builderAtaque2 import Ataque
 from botRolex.defensivo import Defensivo
 from botRolex.builderMuros import Muros
-from botRolex.healer import Healer
+from botRolex.healer2 import Healer
 
 # TORRETAS
 from torretaRolex.sentinel import run_sentinel
@@ -66,7 +66,7 @@ class Player:
                     self.brain = Defensivo(ct) # defensivo
                 elif round == 2:
                     if width < 20:
-                        self.brain = Ataque(ct) # ataque
+                        self.brain = Healer(ct) # ataque
                     else:
                         self.brain = Healer(ct) # normal
                 elif round == 4:

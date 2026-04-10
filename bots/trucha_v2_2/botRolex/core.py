@@ -2,11 +2,11 @@ from cambc import Controller, Direction, EntityType, Environment, Position
 
 def run_core(self, c: Controller):
 
-    entities = c.get_nearby_entities()
-    for e in entities:
-        if c.get_entity_type(e) == EntityType.BUILDER_BOT and c.get_team(e) != c.get_team():
-            if spawnBuilder(c) and self.num_spawned < 10:
-                self.num_spawned += 1
+    #entities = c.get_nearby_entities()
+    #for e in entities:
+    #    if c.get_entity_type(e) == EntityType.BUILDER_BOT and c.get_team(e) != c.get_team():
+    #        if spawnBuilder(c) and self.num_spawned < 10:
+    #            self.num_spawned += 1
     
     ronda = c.get_current_round()
     if self.num_spawned < 5 and ronda < 100:

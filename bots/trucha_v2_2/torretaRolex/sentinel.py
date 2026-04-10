@@ -4,57 +4,37 @@ import math
 TORRETAS = [EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER]
 
 def run_sentinel(self, c: Controller):
-    entities = c.get_nearby_entities()
-
     targets = []
-    for e in entities:
-        try:
-            team = c.get_team(e)
-            tipo = c.get_entity_type(e)
-        except Exception:
-            continue  # entidad ya no existe
-        if team != c.get_team() and tipo != EntityType.HARVESTER:
-            targets.append(e)
+
+    tiles = c.get_nearby_tiles()
+    for t in tiles:
+        bot_id = c.get_tile_builder_bot_id(t)
+        if bot_id is not None and c.get_team(bot_id) != c.get_team():
+            targets.append(t)
+        tid = c.get_tile_building_id(t)
+        entity = c.get_entity_type(tid)
+        if c.get_team(tid) != c.get_team() and entity != EntityType.HARVESTER:
+            targets.append(t)
+    
 
     targets.sort(key=lambda e: get_priority(e, c))
 
     for e in targets:
         try:
-            pos = c.get_position(e)
-            tipo = c.get_entity_type(e)
+            if c.can_fire(e):
+                c.fire(e)
+                return  # ← añadido: una vez dispara, termina el turno
         except Exception:
             continue  # entidad murió entre iteraciones
 
-        if tipo == EntityType.CORE:
-            adjacentes = [
-                pos.add(Direction.NORTH),
-                pos.add(Direction.SOUTH),
-                pos.add(Direction.WEST),
-                pos.add(Direction.EAST),
-            ]
-            adjacentes.sort(key=lambda p: (
-                (p.x - c.get_position().x) ** 2 + (p.y - c.get_position().y) ** 2
-            ))
-            for adj in adjacentes:
-                if c.can_fire(adj):
-                    c.fire(adj)
-                    return
-            # Si ninguna adyacente es alcanzable, intentar el centro
-            if c.can_fire(pos):
-                c.fire(pos)
-            return
-
-        if c.can_fire(pos):
-            c.fire(pos)
-            return  # ← añadido: una vez dispara, termina el turno
-
-
-def get_priority(e, c):
+def get_priority(e, c: Controller):
     try:
+        bot = c.get_tile_builder_bot_id(e)
         t = c.get_entity_type(e)
     except Exception:
         return 999
-
+    if bot is not None and c.get_team(bot) != c.get_team():
+        return 4
     if t == EntityType.HARVESTER:
         return 999
     if t in TORRETAS:
