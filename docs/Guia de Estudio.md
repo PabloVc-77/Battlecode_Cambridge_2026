@@ -1,59 +1,192 @@
-# Guía de Estudio: Cambridge Battlecode 2026
+````md
+# 🧠 Battlecode 2026 – Mecánica de Salto de Muros Cooperativo
 
-¡Bienvenido al equipo! Esta guía está diseñada para ayudarte a entender rápidamente de qué trata la competición y cómo está estructurado el código de tus compañeros para que puedas ponerte al día y empezar a aportar lo antes posible.
+Actúa como un experto desarrollador de Python compitiendo en el torneo **Battlecode 2026**.
 
----
-
-## 1. Conceptos Básicos del Juego
-El juego es una simulación por turnos que ocurre en un mapa de casillas (grid), donde el objetivo principal es **destruir el Core (núcleo) enemigo** o tener más puntos al final de la ronda 2000.
-
-**Puntos Clave:**
-- **Recursos:** Deberás extraer minerales en el mapa: **Titanio** y **Axionita**. Los "Harvesters" las extraen automáticamente.
-- **Unidades Móviles:** Los **Builder Bots** son tus únicas unidades móviles. Construyen todo: harvesters, torretas, muros, etc.
-- **Límites de Computación:** El juego es estricto; cada unidad tiene un máximo de **2 milisegundos (2ms)** por ronda para pensar. Si tu código es ineficiente, el turno de la unidad se cancela.
-- **Sistema de Entidades:** Todo funciona mediante "IDs". Le pides al `Controller` (`ct`) información de una ID, en vez de usar objetos complejos en memoria, por un tema de rendimiento.
+Nuestro objetivo es implementar una nueva mecánica de **"salto de muros" cooperativo** entre nuestros *Builder Bots* y el edificio *Launcher*, utilizando **Markers (marcadores)** para comunicarse, dado que los bots no comparten memoria global.
 
 ---
 
-## 2. Documentación que DEBES leer (Carpeta `docs`)
-El equipo tiene guardada la documentación. Te recomiendo leerlos en este orden:
+## ❗ Problema
 
-1. 📄 **`Game Rules / Game Overview.md`**: El resumen general de las unidades, los stats, y las condiciones de victoria.
-2. 📄 **`Game Rules / Resources.md`**: Cómo funciona el sistema de recursos y cintas transportadoras (conveyors).
-3. 📄 **`Game Rules / Buildier Bot.md`**: Muy importante, ya que codificarás la lógica de estos bots móviles.
-4. 📄 **`Game Rules / Turrets.md`**: Explica cómo defiende/ataca cada tipo de torreta (Sentinel, Breach, Launcher).
-5. 📄 **`Getting Started / Running Matches.md`**: Para entender cómo levantar simulaciones en tu ordenador y probar el código de forma local.
+Actualmente, en nuestro sistema de *pathfinding* (**BugNav / A\***), cuando el algoritmo detecta que el destino es inalcanzable caminando (por ejemplo, completamente bloqueado por muros), el bot se queda atascado.
 
 ---
 
-## 3. Estado Actual del Código del Equipo
-Actualmente, el equipo está trabajando en la versión **`camalar_v2.6`** dentro de la carpeta `bots`. 
+## 💡 Solución
 
-### A. El punto de entrada (`main.py`)
-Todo empieza en `bots/camalar_v2.6/main.py`. Aquí se encuentra la clase `Player`, que tiene la función `run(self, ct)` que se ejecuta todos los turnos por cada entidad. 
-- En el `main.py`, usan un `ct.get_entity_type()` para saber qué tipo de unidad está ejecutando el código.
-- Tienen un **sistema de cerebros ("brains")**. Según la ronda del juego, se asigna una clase cerebro diferente al bot.
+Queremos que el bot:
 
-### B. Sistema de Roles (`botRolex`)
-El comportamiento de los Builder Bots es bastante avanzado. Usan distintas clases según la especialización del bot. Revisa la carpeta `botRolex/`:
-- **`builder.py` / `Harvester`:** Es el archivo más importante (y grande). Parece tener la lógica base para recolectar, pathfinding básico o tomar recursos.
-- **`defensivo.py`:** Se asigna a los bots en la Ronda 1. Su objetivo es colocar defensas iniciales.
-- **`builderMuros3.py`:** Lógica enfocada en que el bot construya muros y protecciones. Se ve que han iterado a la versión 3.
-- **`builderTorretas2.py`:** Lógica de un bot que está enfocado en colocar armamento defensivo/ofensivo.
-
-### C. Torretas (`torretaRolex`)
-Esta carpeta contiene el comportamiento específico que tendrán las torretas una vez construidas (`sentinel.py`, `breach.py`, `launcher.py`). Son más simples porque las torretas no se mueven.
-
-### D. Navegación (`bignav_opus.py`)
-En la raíz de la versión 2.6 hay un archivo grande llamado `bignav_opus.py`. Los juegos en grid requieren algoritmos de búsqueda y pathfinding para moverse eficientemente esquivando muros. Muy probablemente contenga los algoritmos de movimiento del equipo.
+1. Construya una catapulta (*Launcher*).
+2. Le "deje un mensaje" indicando a dónde debe lanzarlo.
 
 ---
 
-## 4. Plan de Acción Recomendado
+## 🧩 División del trabajo
 
-1. **Lee la documentación oficial mínima:** (Game Overview y Builder Bot).
-2. **Corre una partida:** Sigue el archivo `Running Matches.md` y observa visualmente cómo se comporta la versión `camalar_v2.6`. Entender el comportamiento viendo el juego te ahorrará horas de leer código a ciegas.
-3. **Analiza el `main.py` de `camalar_v2.6`**: Entiende qué rol asigna el Core a los bots en los primeros 5 turnos.
-4. **Habla con tu equipo:** Una vez visto lo básico, pregúntales: 
-   - *"He visto que tenéis separados los roles en 'defensivo', 'muros', etc... ¿Qué rol es el más inestable ahora mismo?"*
-   - *"¿Cómo funciona de forma general el bignav_opus.py para el pathfinding?"*
+---
+
+## 🔹 Parte 1: Builder Bot (Lógica de Navegación / BugNav)
+
+Cuando el bot determine que **no puede llegar a su meta caminando**:
+
+### 1. Buscar o construir un Launcher
+
+- Comprobar si ya existe un *Launcher aliado adyacente*.
+- Si no existe:
+  - Buscar una casilla adyacente vacía.
+  - Construirlo usando:
+
+```python
+c.build_launcher(pos)  # Coste: 20 Ti
+````
+
+---
+
+### 2. Colocar un Marker con la meta
+
+Si puede acceder a un Launcher (nuevo o existente):
+
+* Colocar un marcador en una casilla adyacente al launcher y el bot espera en otra casilla adyacente al launcher:
+
+
+* El `valor` codifica la posición objetivo:
+
+```python
+valor = goal.x * 1000 + goal.y
+```
+
+---
+
+### 3. Esperar lanzamiento
+
+* El bot finaliza su turno y espera a ser lanzado.
+
+---
+
+### 4. Manejo de recursos
+
+* Si no puede construir el Launcher por falta de Titanio:
+
+  * Movimiento aleatorio **o**
+  * Continuar bordeando el muro
+
+---
+
+### 5. Consideraciones importantes
+
+* Comprobar cooldowns:
+
+  * `c.can_build_launcher(pos)`
+  * `c.can_place_marker(pos)`
+* Si hay estructuras propias en la casilla (ej. carreteras):
+
+  * Probar a poner el launcher en otra posición donde pueda lanzar al bot a la casilla necesaria
+
+  * Nunca eliminar estructuras propias para poner el launcher, si no que siga con:
+
+  * Movimiento aleatorio **o**
+  * Continuar bordeando el muro
+
+---
+
+## 🔹 Parte 2: Launcher (launcher.py)
+
+En el método:
+
+```python
+def run(c):
+```
+
+Antes de atacar enemigos, debe priorizar ayudar a aliados.
+
+---
+
+### 1. Detectar bots atascados
+
+* Obtener unidades cercanas:
+
+```python
+units = c.get_nearby_units(2)
+```
+
+* Filtrar:
+
+  * Solo aliados
+  * Solo *Builder Bots*
+
+* Si encuentra un bot enemigo, tiene que lanzarlo lo mas lejano al core que pueda. Aunque debe priorizar ayudar a los aliados.
+
+---
+
+### 2. Detectar Marker al lado del launcher
+
+* Para cada bot:
+
+  * Comprobar si en una casilla adyacente al launcher hay un `MARKER` y un bot esperando
+
+---
+
+### 3. Decodificar objetivo
+
+```python
+valor = c.get_marker_value(marker_id)
+
+goal_x = valor // 1000
+goal_y = valor % 1000
+```
+
+* Luego de decodificar el `Marker`, el bot debe romper el marker con `c.destroy(marker_id)`
+---
+
+### 4. Calcular mejor destino de lanzamiento
+
+* Obtener casillas posibles:
+
+```python
+tiles = c.get_nearby_tiles()
+```
+
+* Filtrar:
+
+```python
+c.can_launch(bot_pos, tile_pos)
+```
+
+---
+
+### 5. Selección óptima
+
+Elegir la casilla que:
+
+* Minimice la distancia al objetivo
+* Sea mejor que la posición actual
+
+---
+
+### 6. Lanzar
+
+```python
+c.launch(bot_pos, best_place)
+```
+
+---
+
+## ⚠️ Requisitos clave
+
+* Manejo correcto de cooldowns:
+
+  * `c.can_place_marker`
+  * `c.can_build_launcher`
+* Evitar bloqueos del bot
+* Comunicación robusta mediante encoding/decoding del marker
+
+---
+
+## ✅ Resultado esperado
+
+* Los bots detectan cuando no pueden avanzar
+* Construyen un Launcher si es necesario
+* Señalizan su destino mediante Markers
+* El Launcher interpreta la señal y los lanza estratégicamente
+* Si no pueden ser lanzados, siguen con otro camino
