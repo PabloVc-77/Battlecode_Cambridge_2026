@@ -107,10 +107,10 @@ class Healer:
     # Helpers generales
     # =========================================================================
 
-    def _in_bounds(self, pos):
+    def _in_bounds(self, pos: Position):
         return 0 <= pos.x < self.map_w and 0 <= pos.y < self.map_h
 
-    def _try_move(self, c, direction):
+    def _try_move(self, c: Controller, direction: Direction):
         if direction == Direction.CENTRE:
             return False
         dest = c.get_position().add(direction)
@@ -121,7 +121,7 @@ class Healer:
             return True
         return False
 
-    def _get_damaged_targets(self, c):
+    def _get_damaged_targets(self, c: Controller):
         current = c.get_position()
         damaged = []
         for bid in c.get_nearby_buildings():
@@ -138,7 +138,7 @@ class Healer:
         damaged.sort(key=lambda x: (x[0], x[1]))
         return damaged
 
-    def _find_next_in_chain(self, c, target_pos, include_enemies):
+    def _find_next_in_chain(self, c: Controller, target_pos: Position, include_enemies: bool):
         for bid in c.get_nearby_buildings():
             if not include_enemies and c.get_team(bid) != c.get_team():
                 continue
@@ -175,7 +175,7 @@ class Healer:
                     return pos
         return None
 
-    def _enemy_turret_still_alive(self, c, turret_pos):
+    def _enemy_turret_still_alive(self, c: Controller, turret_pos: Position):
         if not c.is_in_vision(turret_pos):
             return True
         bid = c.get_tile_building_id(turret_pos)
@@ -183,7 +183,7 @@ class Healer:
             return False
         return c.get_entity_type(bid) in ENEMY_TURRET_TYPES and c.get_team(bid) != c.get_team()
 
-    def _counter_sentinel_done(self, c):
+    def _counter_sentinel_done(self, c: Controller):
         if self._counter_target_pos is None:
             return True
         if not c.is_in_vision(self._counter_target_pos):
@@ -193,7 +193,7 @@ class Healer:
             return False
         return c.get_entity_type(bid) == EntityType.SENTINEL and c.get_team(bid) == c.get_team()
 
-    def _get_enemy_turrets(self, c, builds):
+    def _get_enemy_turrets(self, c: Controller, builds: list[EntityType]):
         result = []
         for bid in builds:
             if c.get_team(bid) == c.get_team():
@@ -206,7 +206,7 @@ class Healer:
     # P1 – Counter turret
     # =========================================================================
 
-    def _update_counter_target(self, c, builds):
+    def _update_counter_target(self, c: Controller, builds: list[EntityType]):
         current = c.get_position()
         enemy_turrets = self._get_enemy_turrets(c, builds)
         if not enemy_turrets:
@@ -221,7 +221,7 @@ class Healer:
             self._counter_enemy_turret = turret_pos
             return
 
-    def _run_counter_turret(self, c, builds):
+    def _run_counter_turret(self, c: Controller, builds: list[EntityType]):
         current = c.get_position()
         if self._counter_target_pos is not None:
             if (not self._enemy_turret_still_alive(c, self._counter_enemy_turret)
@@ -231,8 +231,19 @@ class Healer:
                 self._counter_enemy_turret = None
             else:
                 c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
-                done = self.construir(c, self._counter_target_pos,
-                                      EntityType.SENTINEL, self._counter_dir)
+                # Construir barrera si no hay dinero para sentinel, o sentinel si ya hay dinero
+                titanium = c.get_global_resources()[0]
+                precio_sentinel = c.get_sentinel_cost()[0]
+                precio_barrier = c.get_barrier_cost()[0]
+                done = False
+                
+                if titanium >= precio_sentinel:
+                    done = self.construir(c, self._counter_target_pos,
+                                        EntityType.SENTINEL, self._counter_dir)
+                elif titanium >= precio_barrier:
+                    self.construir(c, self._counter_target_pos,
+                                        EntityType.BARRIER)
+                    
                 if done:
                     self._counter_target_pos = None
                     self._counter_dir = None
@@ -268,7 +279,7 @@ class Healer:
         result.sort()
         return result
 
-    def _enemy_bot_still_present(self, c, enemy_pos):
+    def _enemy_bot_still_present(self, c: Controller, enemy_pos: Position):
         if not c.is_in_vision(enemy_pos):
             return False
         uid = c.get_tile_builder_bot_id(enemy_pos)
@@ -419,7 +430,7 @@ class Healer:
 
         return None, None, None
 
-    def _find_best_conveyor_for_intercept(self, c, enemy_pos):
+    def _find_best_conveyor_for_intercept(self, c: Controller, enemy_pos: Position):
         """
         Busca el mejor conveyor/armoured_conveyor aliado para la estructura
         splitter + sentinel. Itera candidatos (con recurso primero, luego vacíos,
@@ -474,7 +485,7 @@ class Healer:
         self._intercept_sentinel_dir = None
         self._intercept_sentinel_road = None
 
-    def _intercept_setup(self, c, enemy_pos):
+    def _intercept_setup(self, c: Controller, enemy_pos: Position):
         result = self._find_best_conveyor_for_intercept(c, enemy_pos)
         if result is None:
             return False
@@ -487,7 +498,7 @@ class Healer:
         self._intercept_sentinel_road = road_type
         return True
 
-    def _run_intercept(self, c):
+    def _run_intercept(self, c: Controller):
         """
         P2: interceptar bot enemigo con splitter + sentinel.
         Persistente hasta que el bot desaparezca o la instalación esté completa.
@@ -620,7 +631,7 @@ class Healer:
         self.construir(c, sen_pos, EntityType.SENTINEL, self._intercept_sentinel_dir)
         return True
 
-    def _construir_splitter(self, c, objetivo, direccion):
+    def _construir_splitter(self, c: Controller, objetivo: Position, direccion: Direction):
         current = c.get_position()
         if not c.is_in_vision(objetivo):
             return False
@@ -653,7 +664,7 @@ class Healer:
     # P3 – Broken chain detection
     # =========================================================================
 
-    def _detect_broken_chain(self, c):
+    def _detect_broken_chain(self, c: Controller):
         for bid in c.get_nearby_buildings():
             if c.get_team(bid) != c.get_team():
                 continue
@@ -697,7 +708,7 @@ class Healer:
     # Patrulla
     # =========================================================================
 
-    def _start_new_patrol(self, c):
+    def _start_new_patrol(self, c: Controller):
         if not self.end_bridges:
             return
         n = len(self.end_bridges)
@@ -718,7 +729,7 @@ class Healer:
             return
         self.patrol_route = []
 
-    def _patrol_move(self, c):
+    def _patrol_move(self, c: Controller):
         current = c.get_position()
         if not self.patrol_route:
             self._start_new_patrol(c)
@@ -761,9 +772,13 @@ class Healer:
     # Construcción genérica
     # =========================================================================
 
-    def construir(self, c, objetivo, edificio, direccion=Direction.CENTRE):
+    def construir(self, c: Controller, objetivo: Position, edificio: EntityType, direccion=Direction.CENTRE):
         current = c.get_position()
-        building_id = c.get_tile_building_id(objetivo)
+        if c.is_in_vision(objetivo):
+            building_id = c.get_tile_building_id(objetivo)
+        else:
+            building_id = None
+            
         if building_id is not None:
             entity = c.get_entity_type(building_id)
             team = c.get_team(building_id)
@@ -779,9 +794,17 @@ class Healer:
                         c.build_road(nxt)
                     self._try_move(c, d)
                     return False
-                if c.can_destroy(objetivo):
+                
+                # Solo destruir si tenemos dinero para construir el mismo turno
+                titanium = c.get_global_resources()[0]
+                precio = 0
+                if edificio == EntityType.SENTINEL:
+                    precio = c.get_sentinel_cost()[0]
+                elif edificio == EntityType.BARRIER:
+                    precio = c.get_barrier_cost()[0]
+                if c.can_destroy(objetivo) and titanium >= precio:
                     c.destroy(objetivo)
-                return False
+                # return False
             elif c.is_tile_passable(objetivo) and team != c.get_team():
                 if current != objetivo:
                     d = self.navegador.moveTo(c, objetivo, four_dirs=False)
@@ -833,7 +856,7 @@ class Healer:
     # run
     # =========================================================================
 
-    def run(self, c):
+    def run(self, c: Controller):
         current = c.get_position()
         if c.get_hp() < c.get_max_hp() and c.can_heal(current):
             c.heal(current)
