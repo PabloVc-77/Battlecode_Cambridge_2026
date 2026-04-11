@@ -11,7 +11,7 @@ from botRolex.helper.layout_defensivo import (
 # Build helpers
 # ---------------------------------------------------------------------------
 
-def _building_matches(c: Controller, building_id, expected_type: EntityType,
+def _building_matches(c: Controller, building_id: int, expected_type: EntityType,
                       expected_dir: Direction) -> bool:
     if building_id is None:
         return False
@@ -73,9 +73,10 @@ class Defensivo:
                             break
 
         # 2) Heal core if damaged
-        if (c.get_hp(self.my_core) < c.get_max_hp(self.my_core)
-                and c.can_heal(node_pos)):
-            c.heal(node_pos)
+        if(c.is_in_vision(node_pos)):
+            if (c.get_hp(self.my_core) < c.get_max_hp(self.my_core)
+                    and c.can_heal(node_pos)):
+                c.heal(node_pos)
         
         # 3) Heal layout
         damaged = []
