@@ -126,7 +126,6 @@ def _is_conv_better(c: Controller, ini: Position, end: Position, layout, entity_
                     if neighbor != end:
                         continue
                 elif entity == EntityType.SPLITTER and c.get_team() == c.get_team(building_id):
-                     # Permitir si es el destino final, saltar si es nodo intermedio
                     if neighbor != end or d != c.get_direction(building_id):
                         continue
 
@@ -170,10 +169,11 @@ class Harvester:
             # mode 3: revisar estructura (Naranja)
             # mode 4: conveyor mode (Azul Oscuro)
             # mode 5: defender ruta con sentinel (Rosa)
+            # mode 6: rastrear cadena rota upstream hasta harvester (Cian)
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
-        self.last_conveyor_pos: Position | None = None   # posición del último conveyor colocado en modo 4
-        self.last_path_built: Position | None = None     # posición de la útima construcción del camino
+        self.last_conveyor_pos: Position | None = None
+        self.last_path_built: Position | None = None
         self.check_pos = None
 
         # Variables de puentes
@@ -203,6 +203,21 @@ class Harvester:
 
         # Ban ore si no podemos llegar
         self.banned_ores: set[Position] = set()
+
+        # ── Modo 6: reparar cadena rota ───────────────────────────────────────
+        # Se activa desde modo 0 cuando se detecta un nodo de transporte aliado
+        # cuyo output está desconectado (cadena rota sin harvester al final).
+        #
+        # _repair_broken_pos : posición del nodo roto — último elemento de la
+        #                      cadena que sí existe. El modo 2 retomará la
+        #                      construcción desde aquí.
+        # _repair_chain_pos  : posición que rastreamos en cada tick, moviéndonos
+        #                      upstream (hacia el harvester fuente) hasta verla.
+        # _repair_harvester  : posición del harvester fuente, una vez encontrado.
+        #                      Cuando se fija, pasamos a modo 2.
+        self._repair_broken_pos: Position | None = None
+        self._repair_chain_pos: Position | None = None
+        self._repair_harvester: Position | None = None
 
         # ── Modo 5: defensa con sentinel ─────────────────────────────────────
         # mode 5: Defender ruta colocando un sentinel en last_bridge_end
@@ -248,16 +263,12 @@ class Harvester:
         """
         if direction == Direction.CENTRE:
             return False
-
         dest = c.get_position().add(direction)
-
         if not self._in_bounds(dest):
             return False
-
         if c.can_move(direction):
             c.move(direction)
             return True
-
         return False
 
     def run(self, c: Controller):
@@ -270,9 +281,6 @@ class Harvester:
 
         self.place_axionite_marker(c)
 
-        # ── Detección de amenaza enemiga (desde modos 2, (3?) y 4) ─────────────
-        
-
         if self.mode == 0:
             c.draw_indicator_dot(current, 255, 255, 255)
             self.buscar_material(c, current)
@@ -283,9 +291,6 @@ class Harvester:
         elif self.mode == 2:
             c.draw_indicator_dot(current, 204, 16, 73)
             self.bridgeHome(c)
-            # Activamos modo 5 si vemos una torreta enemiga,
-            # tenemos un last_bridge_end donde poder colocar el sentinel,
-            # y aún no estamos en modo 5.
             if self.mode == 2 and self.last_bridge_end is not None and not self.is_axionite_path:
                 threat = self._find_enemy_threat(c)
                 if threat is not None:
@@ -303,9 +308,6 @@ class Harvester:
         elif self.mode == 4:
             c.draw_indicator_dot(current, 26, 42, 219)
             self.place_conveyors(c)
-            # Activamos modo 5 si vemos una torreta enemiga,
-            # tenemos un last_bridge_end donde poder colocar el sentinel,
-            # y aún no estamos en modo 5.
             if self.mode == 4 and self.last_bridge_end is not None and not self.is_axionite_path:
                 threat = self._find_enemy_threat(c)
                 if threat is not None:
@@ -319,6 +321,10 @@ class Harvester:
         elif self.mode == 5:
             c.draw_indicator_dot(current, 255, 20, 147)
             self.defend_sentinel(c)
+            return
+        elif self.mode == 6:
+            c.draw_indicator_dot(current, 0, 200, 255)   # Cian
+            self.repair_broken_chain(c)
             return
 
     # helper de mode 0
@@ -339,23 +345,20 @@ class Harvester:
                 bid = c.get_tile_building_id(adj)
                 if bid is None:
                     return True
-                # Passable (conveyor aliada, etc.) también vale
                 if c.is_tile_passable(adj):
                     return True
             else:
-                # Fuera de visión: asumir viable (no rechazar prematuramente)
                 return True
         return False
 
     def oreCerca(self, c: Controller):
         lista = c.get_nearby_tiles()
         changed = False
-        ronda = c.get_current_round()
         for tile in lista:
             if tile in self.banned_ores:
                 continue
 
-            env = c.get_tile_env(tile)  # llamada única por tile
+            env = c.get_tile_env(tile)
             es_mineral = (env == Environment.ORE_TITANIUM or
                           (env == Environment.ORE_AXIONITE and c.get_global_resources()[1] < 533) and len(self.titanium_harvesters) > 1)
             if es_mineral:
@@ -368,7 +371,7 @@ class Harvester:
                     if tile in self.recolectores_set:
                         self.recolectores.remove(tile)
                         self.recolectores_set.discard(tile)
-                    continue  # ore completamente bloqueado — ignorar
+                    continue
 
                 building_id = c.get_tile_building_id(tile)
 
@@ -449,12 +452,35 @@ class Harvester:
     # MODE 0
 
     def buscar_material(self, c: Controller, current: Position):
+
+        transport_types = (
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.BRIDGE,
+            EntityType.SPLITTER,
+        )
+
+        # ── PRIORIDAD 1: detectar cadenas de transporte aliadas rotas ─────────
+        # Antes de buscar ore nuevo, comprobamos si alguna cadena ya construida
+        # tiene el output desconectado (casilla vacía o con elemento no-transporte).
+        # Si encontramos una, pasamos a modo 6 para rastrear upstream hasta el
+        # harvester y retomar la construcción desde el nodo roto.
+        broken = self._scan_broken_chains(c)
+        if broken is not None:
+            broken_pos, upstream_pos = broken
+            self._repair_broken_pos = broken_pos
+            self._repair_chain_pos  = upstream_pos
+            self._repair_harvester  = None
+            self.mode = 6
+            self.repair_broken_chain(c)
+            return
+
         self.oreCerca(c)
         target = None
         entityID = c.get_tile_building_id(current)
         if entityID is not None:
             tileTeam = c.get_team(entityID)
-            if tileTeam != c.get_team() and c.get_entity_type(entityID) in [EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER, EntityType.BRIDGE]:
+            if tileTeam != c.get_team() and c.get_entity_type(entityID) in transport_types:
                 if c.can_fire(current):
                     c.fire(current)
                 return
@@ -695,7 +721,6 @@ class Harvester:
         current = c.get_position()
         bridge_end = self.last_bridge_end
 
-        # ── Detección de torreta enemiga en la siguiente casilla (modo 2) ────────
         if c.is_in_vision(bridge_end) and not self.is_axionite_path:
             next_bid = c.get_tile_building_id(bridge_end)
             if (next_bid is not None
@@ -703,7 +728,7 @@ class Harvester:
                         EntityType.GUNNER, EntityType.SENTINEL,
                         EntityType.BREACH, EntityType.LAUNCHER)
                     and c.get_team(next_bid) != c.get_team()):
-                threat = self._find_enemy_threat(c)   # reutilizamos tu lógica existente
+                threat = self._find_enemy_threat(c)
                 if threat is not None:
                     self.last_bridge_end = self.last_path_built
 
@@ -851,7 +876,7 @@ class Harvester:
             self.current_target = None
             return
 
-        c.draw_indicator_dot(self.check_pos, 255, 128, 0) # Naranja
+        c.draw_indicator_dot(self.check_pos, 255, 128, 0)
 
         if not c.is_in_vision(self.check_pos):
             dir = self.navegador.moveTo(c, self.check_pos, four_dirs=False)
@@ -884,7 +909,6 @@ class Harvester:
         elif entity in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
             next_check = self.check_pos.add(c.get_direction(building_id))
         else:
-            # Es un splitter
             d = c.get_direction(building_id)
             possible_dirs = [d, d.rotate_left().rotate_left(), d.rotate_right().rotate_right()]
             out_of_vision_fallback = None
@@ -944,7 +968,6 @@ class Harvester:
         current = c.get_position()
         conv_pos, conv_dir = self.conveyor_path[0]
 
-        # ── Detección de torreta enemiga en la siguiente casilla (modo 4) ────────
         if c.is_in_vision(conv_pos) and not self.is_axionite_path:
             next_bid = c.get_tile_building_id(conv_pos)
             if (next_bid is not None
@@ -952,7 +975,7 @@ class Harvester:
                         EntityType.GUNNER, EntityType.SENTINEL,
                         EntityType.BREACH, EntityType.LAUNCHER)
                     and c.get_team(next_bid) != c.get_team()):
-                threat = self._find_enemy_threat(c)   # reutilizamos tu lógica existente
+                threat = self._find_enemy_threat(c)
                 if threat is not None:
                     self.conveyor_path.insert(0,(self.last_conveyor_pos, self.last_conveyor_dir))
                     self.last_bridge_end = self.last_conveyor_pos if self.last_conveyor_pos is not None else self.last_path_built
@@ -968,7 +991,6 @@ class Harvester:
                     self.defend_sentinel(c)
                     return
 
-        # Azul Oscuro
         c.draw_indicator_dot(conv_pos, 26, 42, 219)
         c.draw_indicator_line(current, conv_pos, 26, 42, 219)
 
@@ -1097,20 +1119,38 @@ class Harvester:
         return None
 
     def defend_sentinel(self, c: Controller):
+        """
+        Modo 5 — Defensa con sentinel.
+
+        Flujo por tick:
+        1. Comprobar si la amenaza sigue visible y actualizar contador de ausencia.
+        2. Si lleva ≥ _SENTINEL_ABSENT_THRESHOLD turnos sin verse Y ya no hay
+           ningún otro enemigo visible → limpiar sentinel y volver al modo previo.
+        3. Si aún no hemos construido el sentinel:
+           a. Calcular si desde last_bridge_end el sentinel puede atacar la amenaza
+              (usando can_fire_from con todas las direcciones cardinales/diagonales).
+           b. Si puede → acercarse a last_bridge_end y construirlo.
+           c. Si no puede → esperar quieto (ya estamos en zona segura; el sentinel
+              en otro sitio no serviría de nada con la info actual).
+        4. Si ya tenemos sentinel → vigilar (nada que hacer, el sentinel actúa solo).
+        """
         current      = c.get_position()
-        sentinel_pos = self.last_bridge_end
+        sentinel_pos = self.last_bridge_end   # candidato donde poner el sentinel
 
         # ── 1. Actualizar visibilidad de la amenaza ──────────────────────────
         new_threat = self._find_enemy_threat(c)
         if new_threat is not None:
+            # Actualizar posición de la amenaza y resetear contador de ausencia
             self._mode5_threat_pos   = new_threat
             self._mode5_absent_turns = 0
             self._mode5_gone_since   = 0
         else:
+            # Contamos turnos consecutivos sin ver al enemigo
             self._mode5_absent_turns += 1
 
         # ── 2. Comprobar condición de salida ─────────────────────────────────
         if self._mode5_absent_turns >= self._SENTINEL_ABSENT_THRESHOLD:
+            # Destruir el sentinel que colocamos (si aún existe)
             if self._mode5_sentinel_pos is not None:
                 sp = self._mode5_sentinel_pos
                 if c.is_in_vision(sp):
@@ -1123,11 +1163,14 @@ class Harvester:
                                 c.destroy(sp)
                                 self._mode5_sentinel_pos = None
                         else:
+                            # Acercarnos para poder destruirlo
                             dir_ = self.navegador.moveTo(c, sp, four_dirs=False)
                             self._try_move(c, dir_)
                             return
                     else:
+                        # Ya no existe (lo destruyeron o no es nuestro)
                         self._mode5_sentinel_pos = None
+
             # Solo salimos si ya no hay sentinel pendiente de destruir
             if self._mode5_sentinel_pos is None:
                 self.mode = self._mode5_prev_mode
@@ -1135,22 +1178,29 @@ class Harvester:
                 self._mode5_absent_turns = 0
             return
 
-        # ── 3. Si ya tenemos sentinel construido → vigilar o reorientar ──────
+        # ── 3. Si ya tenemos sentinel construido → vigilar o reorientar ────────
         if self._mode5_sentinel_pos is not None:
             sp = self._mode5_sentinel_pos
+            # Verificar que sigue ahí (podría haberlo destruido el enemigo)
             if c.is_in_vision(sp):
                 bid = c.get_tile_building_id(sp)
                 if (bid is None
                         or c.get_entity_type(bid) != EntityType.SENTINEL
                         or c.get_team(bid) != c.get_team()):
+                    # Sentinel destruido — reintentar si la amenaza sigue ahí
                     self._mode5_sentinel_pos = None
                 elif self._mode5_threat_pos is not None:
+                    # Comprobar si el sentinel en su dirección actual puede
+                    # disparar a la amenaza actual. Si no puede (objetivo nuevo
+                    # o desplazado fuera de su arco), destruirlo para que el
+                    # paso 4 lo reconstruya en la dirección correcta.
                     sentinel_facing = c.get_direction(bid)
                     can_hit = c.can_fire_from(
                         sp, sentinel_facing,
                         EntityType.SENTINEL, self._mode5_threat_pos
                     )
                     if not can_hit:
+                        # Acercarnos si hace falta para destruirlo
                         if current.distance_squared(sp) > 2:
                             dir_ = self.navegador.moveTo(c, sp, four_dirs=False)
                             self._try_move(c, dir_)
@@ -1158,19 +1208,18 @@ class Harvester:
                         if c.can_destroy(sp):
                             c.destroy(sp)
                             self._mode5_sentinel_pos = None
-                        return
+                        return  # El siguiente tick lo reconstruirá el paso 4
+            # Indicator visual: línea hacia la amenaza
             if self._mode5_threat_pos is not None:
                 c.draw_indicator_line(current, self._mode5_threat_pos, 255, 20, 147)
             if self._mode5_sentinel_pos is not None:
-                return
+                return  # El sentinel actúa solo; el bot espera
 
-        # ── 4. Aún no hemos construido el sentinel ───────────────────────────
         if sentinel_pos is None or self._mode5_threat_pos is None:
             return
 
         c.draw_indicator_dot(sentinel_pos, 133, 8, 119)
 
-        # Calcular dirección prohibida (conveyor que alimenta sentinel_pos)
         forbidden_dir: "Direction | None" = None
         for d in [Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST]:
             neighbor = sentinel_pos.add(d.opposite())
@@ -1184,11 +1233,14 @@ class Harvester:
             et = c.get_entity_type(nbid)
             if (et in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR)
                     and c.get_team(nbid) == c.get_team()
-                    and c.get_direction(nbid) == d):
+                    and c.get_direction(nbid) == d):          # su output apunta a sentinel_pos
+                # El sentinel no puede mirar en la dirección opuesta a d
+                # (es decir, d.opposite() = la dirección desde la que llega el flujo)
                 forbidden_dir = d.opposite()
                 break
 
-        # Buscar la mejor dirección para el sentinel
+        # Buscar la mejor dirección para el sentinel en sentinel_pos
+        # de modo que pueda disparar al objetivo, excluyendo la dirección prohibida.
         turret_dirs = [
             Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST,
             Direction.NORTHEAST, Direction.NORTHWEST, Direction.SOUTHEAST, Direction.SOUTHWEST,
@@ -1202,11 +1254,13 @@ class Harvester:
                 break
 
         if best_dir is None:
+            # El sentinel en last_bridge_end no puede alcanzar al enemigo
+            # desde ninguna dirección → esperar sin construir
             if self._mode5_threat_pos is not None:
                 c.draw_indicator_line(current, self._mode5_threat_pos, 255, 100, 100)
             return
 
-        # Acercarnos a sentinel_pos
+        # Acercarnos a sentinel_pos para poder construirlo (dist² ≤ 2)
         if current.distance_squared(sentinel_pos) > 2:
             dir_ = self.navegador.moveTo(c, sentinel_pos, four_dirs=False)
             next_pos = current.add(dir_)
@@ -1215,10 +1269,9 @@ class Harvester:
             self._try_move(c, dir_)
             return
 
-        # ── Gestión de la casilla con barrier/clear diferido ──────────
+        # Limpiar casilla si hay algo que no sea nuestro sentinel
         bid = c.get_tile_building_id(sentinel_pos)
         
-        # Comprobamos si ya tenemos una barrier nuestra de reserva ahí
         our_barrier_there = (
             bid is not None
             and c.get_entity_type(bid) == EntityType.BARRIER
@@ -1230,7 +1283,6 @@ class Harvester:
             
             if not self._clear_tile(c, sentinel_pos):
                 return
-            # Tile libre: poner sentinel si tenemos recursos, o barrier de reserva
             if current == sentinel_pos:
                 dir_ = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
                 next_pos = current.add(dir_)
@@ -1240,14 +1292,12 @@ class Harvester:
 
             if c.can_build_sentinel(sentinel_pos, best_dir):
                 self._mode5_barrier_pos = None
-                # Tras destroy, el tile queda libre: construir el sentinel
                 c.build_sentinel(sentinel_pos, best_dir)
                 self._mode5_sentinel_pos = sentinel_pos
                 if self._mode5_threat_pos is not None:
                     c.draw_indicator_line(sentinel_pos, self._mode5_threat_pos, 255, 20, 147)
             return
 
-        # No hay barrier nuestra: gestionar lo que haya en el tile
         if bid is not None:
             et = c.get_entity_type(bid)
             if et == EntityType.SENTINEL and c.get_team(bid) == c.get_team():
@@ -1258,7 +1308,6 @@ class Harvester:
 
         if c.get_global_resources()[0] < c.get_barrier_cost()[0] or not self._clear_tile(c, sentinel_pos):
             return
-        # Tile libre: poner sentinel si tenemos recursos, o barrier de reserva
         if current == sentinel_pos:
             dir_ = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
             next_pos = current.add(dir_)
@@ -1269,8 +1318,284 @@ class Harvester:
         if c.can_build_barrier(sentinel_pos):
             c.build_barrier(sentinel_pos)
             self._mode5_barrier_pos = sentinel_pos
-        # Si no tenemos recursos para barrier, esperamos sin limpiar
         return
+
+    # =========================================================================
+    # HELPERS DE DETECCIÓN DE CADENAS ROTAS
+    # =========================================================================
+
+    def _transport_output_pos(self, c: Controller, bid: int, pos: Position) -> Position | None:
+        """
+        Devuelve la posición de salida de un nodo de transporte aliado.
+        Para bridges: get_bridge_target.
+        Para conveyor/armoured_conveyor: pos + dirección.
+        Para splitter: None (salida múltiple, no la rastreamos en modo 6).
+        """
+        et = c.get_entity_type(bid)
+        try:
+            if et == EntityType.BRIDGE:
+                return c.get_bridge_target(bid)
+            elif et in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+                return pos.add(c.get_direction(bid))
+        except Exception:
+            pass
+        return None
+
+    def _chain_output_is_broken(self, c: Controller, bid: int, pos: Position) -> bool:
+        """
+        Devuelve True si el output del nodo en `pos` está roto:
+          - output_pos existe pero está vacío (sin edificio aliado de transporte),
+          - y NO es un nodo base (_active_ends / layout_pos).
+        Solo se evalúa si output_pos está en visión.
+        """
+        output = self._transport_output_pos(c, bid, pos)
+        if output is None:
+            return False
+        if not self._in_bounds(output):
+            return False
+        if output in self._active_ends or output in self.layout_pos:
+            return False
+        if not c.is_in_vision(output):
+            return False  # no podemos confirmar rotura sin verlo
+
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+        out_bid = c.get_tile_building_id(output)
+        if out_bid is None:
+            return True  # casilla vacía → roto
+        out_et = c.get_entity_type(out_bid)
+        if out_et not in transport_types:
+            return True  # hay algo, pero no es transporte → roto
+        if c.get_team(out_bid) != c.get_team():
+            return True  # transporte enemigo → roto
+        return False
+
+    def _scan_broken_chains(self, c: Controller) -> tuple[Position, Position] | None:
+        """
+        Escanea los edificios de transporte aliados visibles en busca del primer
+        nodo cuyo output esté roto.
+
+        Devuelve (broken_pos, upstream_pos) donde:
+          - broken_pos   = posición del nodo roto (donde hay que retomar desde modo 2).
+          - upstream_pos = posición del nodo anterior en la cadena (punto de partida
+                           del rastreo upstream en modo 6); si no hay upstream visible,
+                           devuelve broken_pos como punto de partida.
+
+        Devuelve None si no se detecta ninguna cadena rota.
+
+        Estrategia de rastreo upstream:
+          Para encontrar el nodo que alimenta a broken_pos buscamos en el vecindario
+          inmediato (dist² ≤ 9) un nodo de transporte aliado cuyo output apunte
+          exactamente a broken_pos.
+        """
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+        current = c.get_position()
+
+        for b in c.get_nearby_buildings():
+            if c.get_team(b) != c.get_team():
+                continue
+            et = c.get_entity_type(b)
+            if et not in transport_types:
+                continue
+            bpos = c.get_position(b)
+            if bpos in self.layout_pos:
+                continue  # nodo base del layout — ignorar
+
+            if not self._chain_output_is_broken(c, b, bpos):
+                continue
+
+            # Roto encontrado: buscar el nodo upstream (el que alimenta bpos)
+            upstream = bpos  # por defecto empezamos desde el nodo roto mismo
+            for ddx in range(-3, 4):
+                for ddy in range(-3, 4):
+                    dsq = ddx * ddx + ddy * ddy
+                    if dsq == 0 or dsq > 9:
+                        continue
+                    nb = Position(bpos.x + ddx, bpos.y + ddy)
+                    if not self._in_bounds(nb):
+                        continue
+                    if not c.is_in_vision(nb):
+                        continue
+                    nb_bid = c.get_tile_building_id(nb)
+                    if nb_bid is None:
+                        continue
+                    if c.get_team(nb_bid) != c.get_team():
+                        continue
+                    nb_et = c.get_entity_type(nb_bid)
+                    if nb_et not in transport_types:
+                        continue
+                    nb_out = self._transport_output_pos(c, nb_bid, nb)
+                    if nb_out == bpos:
+                        upstream = nb
+                        break
+                else:
+                    continue
+                break
+
+            return (bpos, upstream)
+
+        return None
+
+    # =========================================================================
+    # MODE 6: Rastrear cadena rota upstream hasta el harvester
+    # =========================================================================
+
+    def repair_broken_chain(self, c: Controller):
+        """
+        Modo 6: sigue la cadena de transporte aliada hacia atrás (upstream)
+        desde _repair_chain_pos hasta encontrar el harvester fuente.
+
+        Mientras _repair_chain_pos está fuera de visión, el bot se mueve
+        hacia esa posición. Una vez en visión, busca el nodo anterior en la
+        cadena (el que apunta a _repair_chain_pos) y avanza un paso upstream.
+
+        Cuando encontramos un harvester aliado:
+          - current_target = posición del harvester
+          - last_bridge_end = _repair_broken_pos  (retomar construcción desde aquí)
+          - is_axionite_path según el tipo de ore del harvester
+          - mode = 2  (bridgeHome retoma el camino)
+
+        Si en algún momento perdemos la pista (no hay nodo upstream visible),
+        volvemos a modo 2 directamente usando _repair_broken_pos.
+        """
+        current = c.get_position()
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+
+        # Sanity: si no hay estado de reparación, volver a modo 0
+        if self._repair_broken_pos is None:
+            self.mode = 0
+            return
+
+        chain_pos = self._repair_chain_pos
+        if chain_pos is None:
+            chain_pos = self._repair_broken_pos
+
+        c.draw_indicator_dot(chain_pos, 0, 200, 255)
+        c.draw_indicator_line(current, chain_pos, 0, 200, 255)
+
+        # ── 1. Moverse hasta tener chain_pos en visión ───────────────────────
+        if not c.is_in_vision(chain_pos):
+            dir_ = self.navegador.moveTo(c, chain_pos, four_dirs=False)
+            next_pos = current.add(dir_)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            self._try_move(c, dir_)
+            return
+
+        # chain_pos está en visión — inspeccionarla
+        bid = c.get_tile_building_id(chain_pos)
+
+        # ── 2. Casilla vacía o sin transporte aliado: cadena perdida ─────────
+        if bid is None or c.get_team(bid) != c.get_team():
+            # No hay nada aquí; retomamos construcción desde broken_pos
+            self._commit_repair(c)
+            return
+
+        et = c.get_entity_type(bid)
+
+        # ── 3. ¡Encontramos el harvester! ────────────────────────────────────
+        if et == EntityType.HARVESTER:
+            self._repair_harvester = chain_pos
+            ore_env = c.get_tile_env(chain_pos)
+            self.is_axionite_path = (ore_env == Environment.ORE_AXIONITE)
+            self.current_target = chain_pos
+            self.last_bridge_end = self._repair_broken_pos
+            self.last_path_built = self._repair_broken_pos
+            self._repair_broken_pos = None
+            self._repair_chain_pos  = None
+            self._repair_harvester  = None
+            self.mode = 2
+            return
+
+        # ── 4. Es un nodo de transporte aliado: avanzar un paso upstream ─────
+        if et not in transport_types:
+            # Estructura aliada no-transporte: cadena perdida
+            self._commit_repair(c)
+            return
+
+        # Buscar el nodo upstream: aquel cuyo output apunta a chain_pos
+        # Buscamos en un radio dist² ≤ 9 centrado en chain_pos
+        upstream_found: Position | None = None
+        for ddx in range(-3, 4):
+            for ddy in range(-3, 4):
+                dsq = ddx * ddx + ddy * ddy
+                if dsq == 0 or dsq > 9:
+                    continue
+                nb = Position(chain_pos.x + ddx, chain_pos.y + ddy)
+                if not self._in_bounds(nb):
+                    continue
+                if not c.is_in_vision(nb):
+                    continue
+                nb_bid = c.get_tile_building_id(nb)
+                if nb_bid is None:
+                    continue
+                if c.get_team(nb_bid) != c.get_team():
+                    continue
+                nb_et = c.get_entity_type(nb_bid)
+                # El harvester sería el nodo fuente final
+                if nb_et == EntityType.HARVESTER:
+                    upstream_found = nb
+                    break
+                if nb_et not in transport_types:
+                    continue
+                nb_out = self._transport_output_pos(c, nb_bid, nb)
+                if nb_out == chain_pos:
+                    upstream_found = nb
+                    break
+            else:
+                continue
+            break
+
+        if upstream_found is not None:
+            # Avanzar un paso upstream
+            self._repair_chain_pos = upstream_found
+            # Llamada recursiva inmediata si ya está en visión (evita tick perdido)
+            if c.is_in_vision(upstream_found):
+                self.repair_broken_chain(c)
+            else:
+                dir_ = self.navegador.moveTo(c, upstream_found, four_dirs=False)
+                next_pos = current.add(dir_)
+                if c.can_build_road(next_pos):
+                    c.build_road(next_pos)
+                self._try_move(c, dir_)
+        else:
+            # Ningún nodo upstream visible: movernos hacia chain_pos para ver más
+            # Si ya estamos adyacentes y no vemos nada, la cadena está perdida
+            if current.distance_squared(chain_pos) <= 2:
+                self._commit_repair(c)
+            else:
+                dir_ = self.navegador.moveTo(c, chain_pos, four_dirs=False)
+                next_pos = current.add(dir_)
+                if c.can_build_road(next_pos):
+                    c.build_road(next_pos)
+                self._try_move(c, dir_)
+
+    def _commit_repair(self, c: Controller):
+        """
+        No pudimos encontrar el harvester fuente. Retomamos la construcción
+        desde _repair_broken_pos directamente usando el modo 2 normal.
+        """
+        if self._repair_broken_pos is not None:
+            self.last_bridge_end = self._repair_broken_pos
+            self.last_path_built = self._repair_broken_pos
+        self._repair_broken_pos = None
+        self._repair_chain_pos  = None
+        self._repair_harvester  = None
+        self.mode = 2
 
     # UTILITY
 
