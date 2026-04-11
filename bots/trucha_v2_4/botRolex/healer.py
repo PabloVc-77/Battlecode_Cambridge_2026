@@ -814,6 +814,14 @@ class Healer:
                     self._try_move(c, d)
                 if c.can_fire(objetivo):
                     c.fire(objetivo)
+                    
+                if not c.is_in_vision(objetivo):
+                    d = self.navegador.moveTo(c, objetivo, four_dirs=False)
+                    nxt = current.add(d)
+                    if c.can_build_road(nxt):
+                        c.build_road(nxt)
+                    self._try_move(c, d)
+                    return False
                 if c.get_tile_building_id(objetivo) is None:
                     for d in [Direction.NORTH, Direction.EAST,
                               Direction.SOUTH, Direction.WEST,
