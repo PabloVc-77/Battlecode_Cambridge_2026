@@ -302,6 +302,9 @@ class BugNav:
         self._jump_state = "IDLE"
         self._jump_landing_target: Position | None = None
         self._jump_wait_ticks = 0
+        # Posiciones desde las que ya lanzamos un salto para el goal actual.
+        # Evita el bucle saltar→aterrizar→volver→saltar desde el mismo sitio.
+        self._jumped_from_positions: set = set()
 
         # BFS rápido (goal en visión)
         self._bfs_path: list = []
@@ -413,6 +416,7 @@ class BugNav:
         self._jump_state = "IDLE"
         self._jump_landing_target = None
         self._jump_wait_ticks = 0
+        self._jumped_from_positions = set()
 
     def _switch_hand(self):
         self._use_left_hand = not self._use_left_hand
@@ -459,6 +463,26 @@ class BugNav:
             self.start = current
             self.prevGoal = goal
 
+        # ── Detectar aterrizaje post-salto ────────────────────────────────────
+        # Si el jump_state era MARKER_PLACED y la posición actual es distinta
+        # al landing esperado (o simplemente cambió respecto al tick anterior),
+        # significa que fuimos lanzados. Reiniciar A* desde la nueva posición
+        # para que busque camino desde aquí sin la restricción del failed_goal.
+        if self._jump_state == "MARKER_PLACED" and current != self.start:
+            # Registrar la posición de origen del salto para no repetirlo
+            if self.start is not None:
+                self._jumped_from_positions.add(self.start)
+            # Reiniciar pathfinding desde la nueva posición
+            self._astar_failed_goal = None
+            self._astar = None
+            self._path = []
+            self._bfs_path = []
+            self._jump_state = "IDLE"
+            self._jump_landing_target = None
+            self._jump_wait_ticks = 0
+            self.start = current
+            self.reset()
+
         # ── 1. BFS rápido si el goal ya está en visión ───────────────────────
         if c.is_in_vision(goal):
             if self._bfs_path and not _can_move(c, self._bfs_path[0], w, h):
@@ -476,18 +500,20 @@ class BugNav:
             self._bfs_path = []
 
         # ── 2. A* incremental en background ──────────────────────────────────
-        # No relanzar si ya agotó el mapa para este goal exacto: BugNav toma
-        # el control indefinidamente hasta que cambie el goal o el mapa.
         astar_blocked = (self._astar_failed_goal == goal)
-        
-        # 1. Si ya estamos a la mitad del proceso de salto, no lo abandonamos aunque AStar cambie de idea
+
+        # Si ya estamos en medio del proceso de salto, continuarlo
         if self._jump_state != "IDLE":
             jump_dir = self._try_jumping_mechanic(c, goal, w, h)
             if jump_dir is not None:
                 return jump_dir
-        # 2. Si AStar dice que no se puede, pero llevamos pocos turnos "caminando" por el muro,
-        # obligamos al bot a que intente caminar alrededor (wall_steps) antes de gastar 100 Titanium.
-        elif astar_blocked and self._jump_failed_goal != goal and self.wall_steps > 15:
+        # Solo intentar el salto si A* terminó y FALLÓ definitivamente,
+        # el A* no está en curso, no tenemos path, y llevamos bordando un rato.
+        elif (astar_blocked
+              and self._astar is None
+              and not self._path
+              and self._jump_failed_goal != goal
+              and self.wall_steps > 15):
             jump_dir = self._try_jumping_mechanic(c, goal, w, h)
             if jump_dir is not None:
                 return jump_dir
@@ -525,53 +551,112 @@ class BugNav:
     # =========================================================================
     # Mecanica de Salto de Muros
     # =========================================================================
+
+    # Posiciones desde las que ya fuimos lanzados para este goal.
+    # Al aterrizar en una nueva posición, el A* se reinicia desde ahí,
+    # pero si el mapa sigue siendo el mismo y vuelve a fallar, NO saltamos
+    # desde una posición que ya usamos (evita el bucle saltar→volver→saltar).
+    # Se limpia en _full_reset (cuando cambia el goal).
+
     def _find_unreachable_better_tile(self, c: Controller, current: Position, goal: Position, w: int, h: int) -> Position | None:
-        # 1. BFS para encontrar todo lo conectable caminando desde origin (radio dist_sq <= 36)
-        walkable = {current}
+        """
+        Busca el mejor tile de aterrizaje que:
+          1. No sea alcanzable caminando desde current (según mapa visible).
+          2. Sea lanzable desde alguna posición adyacente al bot donde
+             se pueda construir un launcher (casilla vacía o road propia).
+          3. Mejore significativamente la distancia al goal respecto a current.
+        """
+        LAUNCHER_RANGE_SQ = 26
+        BOT_VISION_SQ = 20
+
+        # 1. BFS para encontrar todo lo conectable caminando desde current
+        walkable: set = {current}
         queue = [current]
         head = 0
         while head < len(queue):
-            pos = queue[head]
-            head += 1
+            pos = queue[head]; head += 1
             for d in _ALL_DIRS:
                 nb = pos.add(d)
                 if nb not in walkable and _in_bounds(nb, w, h):
-                    if current.distance_squared(nb) <= 20:
+                    if current.distance_squared(nb) <= BOT_VISION_SQ:
                         if c.is_in_vision(nb) and _passable(c, nb):
                             walkable.add(nb)
                             queue.append(nb)
-                            
-        # 2. Buscar casillas no conectables directamente, pasables, y mejores
+
+        # 2. Posibles posiciones del launcher: adyacentes al bot que estén
+        #    vacías, tengan una road propia (destruible), o ya tengan un launcher aliado.
+        launcher_candidates: list[Position] = []
+        for d in _ALL_DIRS:
+            adj = current.add(d)
+            if not _in_bounds(adj, w, h) or not c.is_in_vision(adj):
+                continue
+            bid = c.get_tile_building_id(adj)
+            if bid is None:
+                launcher_candidates.append(adj)
+            else:
+                et = c.get_entity_type(bid)
+                team = c.get_team(bid)
+                if et == EntityType.LAUNCHER and team == c.get_team():
+                    launcher_candidates.append(adj)
+                elif et == EntityType.ROAD and team == c.get_team():
+                    # Road propia: destruible para poner el launcher
+                    launcher_candidates.append(adj)
+
+        if not launcher_candidates:
+            return None
+
+        # 3. Mejor tile de aterrizaje: no walkable, pasable, alcanzable desde
+        #    algún launcher_candidate, y que mejore la distancia al goal.
         current_dist = current.distance_squared(goal)
-        candidates = c.get_nearby_tiles()
-        
-        best_landing = None
-        best_dist = current_dist - 4
-            
-        for tile in candidates:
-            if tile not in walkable and current.distance_squared(tile) <= 20:
-                if c.is_tile_passable(tile):
-                    d = tile.distance_squared(goal)
-                    if d <= best_dist:
-                        best_dist = d
-                        best_landing = tile
-                        
+        best_landing: Position | None = None
+        best_dist = current_dist - 4  # mejora mínima exigida
+
+        for tile in c.get_nearby_tiles():
+            if tile in walkable:
+                continue
+            if not c.is_tile_passable(tile):
+                continue
+            tile_dist = tile.distance_squared(goal)
+            if tile_dist >= best_dist:
+                continue
+            for lpos in launcher_candidates:
+                dsq = lpos.distance_squared(tile)
+                if 0 < dsq <= LAUNCHER_RANGE_SQ:
+                    best_dist = tile_dist
+                    best_landing = tile
+                    break
+
         return best_landing
 
     def _try_jumping_mechanic(self, c: Controller, goal: Position, w: int, h: int) -> Direction | None:
-        from cambc import EntityType
-        current = c.get_position()
+        """
+        Máquina de estados para el salto cooperativo con el Launcher:
+          IDLE          → evaluar si tiene sentido saltar y calcular landing
+          BUILDING      → construir launcher / esperar recursos
+          MARKER_PLACED → marker colocado, esperar a ser lanzado
         
-        # Verificamos si vale la pena saltar ANTES de construir (debe haber lado transitable post-muro)
+        Anti-bucle: tras aterrizar en una nueva posición, el A* se relanza
+        desde ahí (_astar_failed_goal se limpia en _full_reset cuando el goal
+        cambia, pero cuando el goal ES el mismo se limpia explícitamente aquí
+        al registrar el salto en _jumped_from_positions).
+        """
+        current = c.get_position()
+
+        # ── Estado IDLE: evaluar si vale la pena saltar ───────────────────────
         if self._jump_state == "IDLE":
+            # No saltar desde una posición que ya usamos para este goal
+            if current in self._jumped_from_positions:
+                return None
             landing = self._find_unreachable_better_tile(c, current, goal, w, h)
             if landing is None:
                 return None
             self._jump_landing_target = landing
 
-        launcher_pos = None
+        LAUNCHER_RANGE_SQ = 26
+        landing = self._jump_landing_target
 
-        # 1. Buscamos launcher adyacente asociado
+        # ── Buscar launcher adyacente aliado existente ────────────────────────
+        launcher_pos: Position | None = None
         for d in _ALL_DIRS:
             adj = current.add(d)
             if not _in_bounds(adj, w, h): continue
@@ -580,68 +665,133 @@ class BugNav:
                 launcher_pos = adj
                 break
 
-        # 2. Si no hay launcher, intentamos construir uno
+        # ── Si no hay launcher, construirlo ───────────────────────────────────
         if launcher_pos is None:
             for d in _ALL_DIRS:
                 adj = current.add(d)
-                if not _in_bounds(adj, w, h): continue
+                if not _in_bounds(adj, w, h) or not c.is_in_vision(adj): continue
+                # Verificar rango al landing
+                if landing is not None and not (0 < adj.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
+                    continue
+                bid = c.get_tile_building_id(adj)
+                # Destruir road propia si la hay (no bloquea)
+                if bid is not None:
+                    et = c.get_entity_type(bid)
+                    tm = c.get_team(bid)
+                    if et == EntityType.ROAD and tm == c.get_team():
+                        if c.can_destroy(adj):
+                            c.destroy(adj)
+                        # La road se destruye pero el build ocurre el próximo tick
+                        self._jump_state = "BUILDING"
+                        return Direction.CENTRE
+                    else:
+                        continue  # ocupado por algo que no podemos quitar
                 if c.can_build_launcher(adj):
                     c.build_launcher(adj)
                     launcher_pos = adj
                     self._jump_state = "BUILDING"
                     return Direction.CENTRE
-            
-            # No se pudo construir
-            return None
+            # No pudimos construir este tick
+            self._jump_state = "BUILDING"
+            return Direction.CENTRE
 
-        # 3. Verificar marcadores alrededor del launcher
-        marker_id = None
+        # ── Tenemos launcher: verificar que alcanza el landing ────────────────
+        if landing is not None and not (0 < launcher_pos.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
+            # El launcher no tiene rango al landing actual — recalcular
+            new_landing = self._find_unreachable_better_tile(c, current, goal, w, h)
+            if new_landing is None or not (0 < launcher_pos.distance_squared(new_landing) <= LAUNCHER_RANGE_SQ):
+                self._jump_state = "IDLE"
+                self._jump_failed_goal = goal
+                return None
+            self._jump_landing_target = new_landing
+            landing = new_landing
+
+        # ── Buscar marker nuestro adyacente al launcher con el valor correcto ─
+        marker_pos: Position | None = None
+        expected_val = landing.x * 1000 + landing.y if landing is not None else -1
+        for d in _ALL_DIRS:
+            adj = launcher_pos.add(d)
+            if not _in_bounds(adj, w, h) or not c.is_in_vision(adj): continue
+            if adj == current: continue
+            bid = c.get_tile_building_id(adj)
+            if bid is None: continue
+            if c.get_entity_type(bid) != EntityType.MARKER: continue
+            if c.get_team(bid) != c.get_team(): continue
+            if c.get_marker_value(bid) == expected_val:
+                marker_pos = adj
+                break
+
+        # ── Marker ya colocado: esperar a ser lanzado ─────────────────────────
+        if marker_pos is not None:
+            self._jump_state = "MARKER_PLACED"
+            self._jump_wait_ticks = 0
+            return Direction.CENTRE
+
+        # ── Marker no encontrado ──────────────────────────────────────────────
+        if self._jump_state == "MARKER_PLACED":
+            # El launcher destruyó el marker → o nos lanzó o no pudo.
+            self._jump_wait_ticks += 1
+            if self._jump_wait_ticks > 3:
+                self._jumped_from_positions.add(current)
+                self._jump_state = "IDLE"
+                self._jump_wait_ticks = 0
+                self._jump_landing_target = None
+                self._astar_failed_goal = None
+                return None
+            return Direction.CENTRE
+
+        # ── Colocar marker ────────────────────────────────────────────────────
+        # El action radius del builder bot es dist²≤2, así que solo podemos
+        # poner markers en casillas inmediatamente adyacentes (dist²≤2 desde current).
+        # Buscamos casillas que estén adyacentes al launcher Y dentro de nuestro rango.
+        t = landing if landing is not None else goal
+        valor = t.x * 1000 + t.y
+
+        ACTION_RADIUS_SQ = 2  # radio de acción del builder bot
+
+        # Prioridad 1: casillas adyacentes al launcher que también estén en nuestro radio
         for d in _ALL_DIRS:
             adj = launcher_pos.add(d)
             if not _in_bounds(adj, w, h): continue
-            if c.is_in_vision(adj):
-                bid = c.get_tile_building_id(adj)
-                if bid is not None and c.get_entity_type(bid) == EntityType.MARKER:
-                    marker_id = bid
-                    break
-
-        # 4. Logica de espera y colocacion
-        if marker_id is not None:
-            self._jump_state = "MARKER_PLACED"
-            return Direction.CENTRE
-        else:
-            if self._jump_state == "MARKER_PLACED":
-                # El launcher rompió el marcador pero no nos lanzó
-                self._jump_failed_goal = goal
-                self._jump_state = "IDLE"
-                return None
-            else:
-                search_centers = [current, launcher_pos]
-                for center in search_centers:
-                    for d in _ALL_DIRS:
-                        adj = center.add(d)
-                        if not _in_bounds(adj, w, h): continue
-                        
-                        # Codificamos LA MEJOR CASILLA DE ATERRIZAJE en lugar de la meta final
-                        t = self._jump_landing_target if self._jump_landing_target is not None else goal
-                        valor = t.x * 1000 + t.y
-                        
-                        if c.can_place_marker(adj):
-                            c.place_marker(adj, valor)
-                            self._jump_state = "MARKER_PLACED"
-                            self._jump_wait_ticks = 0
-                            return Direction.CENTRE
-                
-                # Si no pudo colocar marker (p. ej. por estar rodeado de otras cosas)
-                self._jump_wait_ticks += 1
-                if self._jump_wait_ticks > 5:
-                    self._jump_state = "IDLE"
-                    self._jump_failed_goal = goal
-                    self._jump_wait_ticks = 0
-                    return None
-
-                self._jump_state = "BUILDING"
+            if adj == current: continue
+            if adj == launcher_pos: continue
+            # Verificar que está dentro del action radius del bot
+            if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
+            if c.can_place_marker(adj):
+                c.place_marker(adj, valor)
+                self._jump_state = "MARKER_PLACED"
+                self._jump_wait_ticks = 0
                 return Direction.CENTRE
+
+        # Prioridad 2: cualquier casilla en nuestro radio de acción (el launcher
+        # también busca en sus adyacentes, así que lo encontrará igualmente)
+        for d in _ALL_DIRS:
+            adj = current.add(d)
+            if not _in_bounds(adj, w, h): continue
+            if adj == launcher_pos: continue
+            if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
+            if c.can_place_marker(adj):
+                c.place_marker(adj, valor)
+                self._jump_state = "MARKER_PLACED"
+                self._jump_wait_ticks = 0
+                return Direction.CENTRE
+
+        # Prioridad 3: en la propia posición del bot (dist²=0, siempre en rango)
+        if c.can_place_marker(current):
+            c.place_marker(current, valor)
+            self._jump_state = "MARKER_PLACED"
+            self._jump_wait_ticks = 0
+            return Direction.CENTRE
+
+        # No pudo colocar marker este tick — esperar
+        self._jump_wait_ticks += 1
+        if self._jump_wait_ticks > 5:
+            self._jump_state = "IDLE"
+            self._jump_failed_goal = goal
+            self._jump_wait_ticks = 0
+            return None
+        self._jump_state = "BUILDING"
+        return Direction.CENTRE
 
     def _consume_path(self, c: Controller, path: list,
                       four_dirs: bool, w: int, h: int) -> Direction:

@@ -115,11 +115,16 @@ class Launcher:
         search_tiles = set()
         w = c.get_map_width()
         h = c.get_map_height()
-        for pos in [launcher_pos, bot_pos]:
+        # Buscar en: posición del bot, adyacentes al launcher, adyacentes al bot
+        check_positions = [launcher_pos, bot_pos]
+        for pos in check_positions:
             for adj in adjacent_positions(pos):
                 if 0 <= adj.x < w and 0 <= adj.y < h:
                     search_tiles.add((adj.x, adj.y))
-                
+        # También incluir la posición exacta del bot (puede poner marker en dist²=0)
+        if 0 <= bot_pos.x < w and 0 <= bot_pos.y < h:
+            search_tiles.add((bot_pos.x, bot_pos.y))
+
         for x, y in search_tiles:
             adj = Position(x, y)
             if not c.is_in_vision(adj): continue
@@ -131,7 +136,15 @@ class Launcher:
             if c.get_team(bid) != my_team:
                 continue
             value = c.get_marker_value(bid)
+            # Filtrar: los markers de salto usan encoding x*1000+y.
+            # Máximo para mapa 50x50: 49*1000+49 = 49049.
+            # Markers de axionita usan 833*10000+... >> 100000. Ignorarlos.
+            if value > 100000:
+                continue
             goal = decode_goal(value)
+            # Validar que las coordenadas decodificadas están dentro del mapa
+            if not (0 <= goal.x < w and 0 <= goal.y < h):
+                continue
             return goal, adj
         return None, None
 
