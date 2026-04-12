@@ -661,7 +661,6 @@ class BugNav:
                         if c.is_in_vision(nb) and _passable(c, nb):
                             walkable.add(nb)
                             queue.append(nb)
-        print(f"DEBUG: walkable_count={len(walkable)}")
 
         # 2. Posiciones válidas para el launcher: adyacentes al bot
         launcher_candidates: list[Position] = []
