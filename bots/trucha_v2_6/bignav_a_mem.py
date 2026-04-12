@@ -468,7 +468,9 @@ class BugNav:
         if (self._jump_state == "IDLE"
                 and not self._opp_marker_placed
                 and current.distance_squared(goal) > OPP_LAUNCH_MIN_GOAL_SQ):
-            self._try_opportunistic_launch(c, goal, w, h)
+            opp_dir = self._try_opportunistic_launch(c, goal, w, h)
+            if opp_dir is not None:
+                return opp_dir
 
         # ── 1. BFS rápido si el goal ya está en visión ───────────────────────
         if c.is_in_vision(goal):
@@ -533,104 +535,90 @@ class BugNav:
     # =========================================================================
 
     def _try_opportunistic_launch(self, c: Controller, goal: Position,
-                                   w: int, h: int) -> None:
+                                   w: int, h: int) -> Direction | None:
         """
-        Si hay un launcher aliado EXISTENTE adyacente al bot (dist²<=2) y puede
-        lanzarnos a una casilla que nos acerque significativamente al goal,
-        colocamos un marker con el destino para que el launcher lo recoja.
-
-        Solo actúa si:
-          - El launcher ya existe (no lo construimos aquí — eso es la jumping mechanic).
-          - El goal está a dist² > OPP_LAUNCH_MIN_GOAL_SQ.
-          - Hay al menos una casilla de aterrizaje que mejore en
-            OPP_LAUNCH_MIN_IMPROVEMENT_SQ la dist² actual al goal.
-          - No hemos colocado ya un marker oportunista este ciclo.
-
-        El marker se coloca con encoding x*1000+y (igual que la jumping mechanic)
-        para que el Launcher lo decodifique con decode_goal().
+        Busca launchers aliados en visión. Si uno puede acercarnos al goal:
+          - Si estamos adyacentes: colocamos marker y esperamos (CENTRE).
+          - Si no estamos adyacentes: caminamos hacia él.
         """
         current = c.get_position()
-        ACTION_RADIUS_SQ = 2
-        LAUNCHER_RANGE_SQ = 26
-
-        # 1. Buscar launcher aliado adyacente ya existente
-        launcher_pos: Position | None = None
-        for d in _ALL_DIRS:
-            adj = current.add(d)
-            if not _in_bounds(adj, w, h):
-                continue
-            bid = c.get_tile_building_id(adj)
-            if bid is None:
-                continue
-            if (c.get_entity_type(bid) == EntityType.LAUNCHER
-                    and c.get_team(bid) == c.get_team()):
-                launcher_pos = adj
-                break
-
-        if launcher_pos is None:
-            return  # ningún launcher aliado adyacente
-
-        # 2. Buscar la mejor casilla de aterrizaje que el launcher pueda alcanzar
         current_dist = current.distance_squared(goal)
-        best_target: Position | None = None
-        best_dist = current_dist - OPP_LAUNCH_MIN_IMPROVEMENT_SQ
+        
+        # 1. Buscar el mejor launcher en memoria que esté en visión
+        best_launcher: Position | None = None
+        best_landing: Position | None = None
+        best_total_dist = current_dist - OPP_LAUNCH_MIN_IMPROVEMENT_SQ
+        
+        # Consolidamos launchers visibles desde el mapa persistente
+        visible_launchers = [p for p in self._map_launchers if c.is_in_vision(p)]
+        
+        for lpos in visible_launchers:
+            # Para este launcher, buscar su mejor aterrizaje
+            best_l_target: Position | None = None
+            best_l_dist = current_dist # debe mejorar al menos algo
+            
+            for tile in c.get_nearby_tiles():
+                if not c.is_tile_passable(tile):
+                    continue
+                # can_launch comprueba adyacencia lpos-bot y rango lpos-tile.
+                # Como el bot puede no estar adyacente aún, simulamos el salto
+                # comprobando dist² lpos-tile <= 26
+                d_launch = lpos.distance_squared(tile)
+                if 0 < d_launch <= 26:
+                    d_goal = tile.distance_squared(goal)
+                    if d_goal < best_l_dist:
+                        best_l_dist = d_goal
+                        best_l_target = tile
+            
+            if best_l_target is not None:
+                # El "beneficio" real debe considerar el camino al launcher
+                # Pero por simplicidad, si mejora significativamente, vamos.
+                if best_l_dist < best_total_dist:
+                    best_total_dist = best_l_dist
+                    best_launcher = lpos
+                    best_landing = best_l_target
 
-        for tile in c.get_nearby_tiles():
-            if not c.is_tile_passable(tile):
-                continue
-            # El launcher lanza desde su posición al bot, y luego al tile.
-            # can_launch comprueba que bot_pos está adyacente y tile está en rango.
-            if not c.can_launch(current, tile):
-                continue
-            d = tile.distance_squared(goal)
-            if d < best_dist:
-                best_dist = d
-                best_target = tile
+        if best_launcher is None:
+            return None
 
-        if best_target is None:
-            return  # el launcher no ofrece mejora suficiente
-
-        # 3. Colocar marker con el destino codificado
-        valor = best_target.x * 1000 + best_target.y
-
-        # Buscar casilla adyacente al launcher dentro de nuestro radio de acción
-        placed = False
-
-        # Prioridad 1: casilla adyacente al launcher Y en nuestro radio
-        for d in _ALL_DIRS:
-            adj = launcher_pos.add(d)
-            if not _in_bounds(adj, w, h): continue
-            if adj == current or adj == launcher_pos: continue
-            if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
-            id_Adj = c.get_tile_building_id(adj) 
-            if c.get_entity_type(id_Adj) == EntityType.ROAD and c.get_team(id_Adj) == c.get_team():
-                if c.can_destroy(adj):
-                    c.destroy(adj)
-            if c.can_place_marker(adj):
-                c.place_marker(adj, valor)
-                placed = True
-                break
-
-        # Prioridad 2: cualquier casilla en nuestro radio de acción
-        if not placed:
+        # 2. Si estamos adyacentes, colocar marker
+        if current.distance_squared(best_launcher) <= 2:
+            valor = best_landing.x * 1000 + best_landing.y
+            ACTION_RADIUS_SQ = 2
+            placed = False
+            # Intentar colocar marker (mismo orden de prioridad que antes)
             for d in _ALL_DIRS:
-                adj = current.add(d)
+                adj = best_launcher.add(d)
                 if not _in_bounds(adj, w, h): continue
-                if adj == launcher_pos: continue
+                if adj == current or adj == best_launcher: continue
                 if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
                 if c.can_place_marker(adj):
                     c.place_marker(adj, valor)
-                    placed = True
-                    break
-
-        # Prioridad 3: en la posición propia
-        if not placed and c.can_place_marker(current):
-            c.place_marker(current, valor)
-            placed = True
-
-        if placed:
-            self._opp_marker_placed = True
-            self._opp_launcher_pos = launcher_pos
+                    placed = True; break
+            if not placed:
+                for d in _ALL_DIRS:
+                    adj = current.add(d)
+                    if not _in_bounds(adj, w, h): continue
+                    if adj == best_launcher: continue
+                    if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
+                    if c.can_place_marker(adj):
+                        c.place_marker(adj, valor); placed = True; break
+            if not placed and c.can_place_marker(current):
+                c.place_marker(current, valor); placed = True
+            
+            if placed:
+                self._opp_marker_placed = True
+                self._opp_launcher_pos = best_launcher
+                self._opp_wait_ticks = 0
+                return Direction.CENTRE
+        
+        # 3. Si no estamos adyacentes, caminar hacia el launcher
+        dir_to_launcher = current.direction_to(best_launcher)
+        if _can_move(c, dir_to_launcher, w, h):
+            return dir_to_launcher
+        
+        # Si no podemos movernos directo, BugNav se encargará en el fallback
+        return None
 
     # =========================================================================
     # Jumping Mechanic (v3.0)
