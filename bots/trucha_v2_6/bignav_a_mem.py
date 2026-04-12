@@ -75,6 +75,9 @@ BFS_MAX_NODES = 80        # BFS rápido cuando goal está en visión
 OPP_LAUNCH_MIN_GOAL_SQ        = 25  # dist² mínima al goal para plantearse el salto
 OPP_LAUNCH_MIN_IMPROVEMENT_SQ = 9   # mejora mínima en dist² que debe ofrecer el salto
 
+# Umbral de reserva para construir launchers (evita agotar recursos)
+LAUNCHER_RESERVE_THRESHOLD = 100
+
 _ALL_DIRS = [
     Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST,
     Direction.NORTHEAST, Direction.NORTHWEST, Direction.SOUTHEAST, Direction.SOUTHWEST,
@@ -759,9 +762,16 @@ class BugNav:
                     else:
                         continue
                 if c.can_build_launcher(adj):
-                    c.build_launcher(adj)
-                    self._building_wait_ticks = 0
-                    return Direction.CENTRE
+                    # Solo construir si estamos por encima del umbral de reserva
+                    res = c.get_global_resources()
+                    if res[0] >= LAUNCHER_RESERVE_THRESHOLD and res[1] >= LAUNCHER_RESERVE_THRESHOLD:
+                        c.build_launcher(adj)
+                        self._building_wait_ticks = 0
+                        return Direction.CENTRE
+                    else:
+                        # Si no hay recursos suficientes, abandonamos este intento de salto por ahora
+                        self._jump_state = "IDLE"
+                        return None
 
             return Direction.CENTRE
 
