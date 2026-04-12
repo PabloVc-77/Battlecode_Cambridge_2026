@@ -1,0 +1,8 @@
+{
+  "track_id": "launcher_pathfinding_20260412",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-04-12T14:10:00Z",
+  "updated_at": "2026-04-12T14:10:00Z",
+  "description": "Improve pathfinding using launchers (build and reuse)."
+}
