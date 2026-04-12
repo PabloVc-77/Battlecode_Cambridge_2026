@@ -1,9 +1,9 @@
 # Implementation Plan: Launcher-Assisted Pathfinding
 
 ## Phase 1: Persistent Mapping and Resource Management
-- [ ] Task: Implement persistent mapping for discovered launchers
-    - [ ] Write tests for storing and updating launcher positions in the persistent map
-    - [ ] Implement `BugNav` modifications to track launchers independently
+- [x] Task: Implement persistent mapping for discovered launchers e590234
+    - [x] Write tests for storing and updating launcher positions in the persistent map
+    - [x] Implement `BugNav` modifications to track launchers independently
 - [ ] Task: Implement resource threshold logic for launcher construction
     - [ ] Write tests ensuring launchers are only built above the safe reserve limit
     - [ ] Add resource check to the jumping mechanic logic
