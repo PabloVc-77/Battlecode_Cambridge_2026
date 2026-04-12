@@ -488,16 +488,18 @@ class BugNav:
 
         # ── 2. A* incremental en background ──────────────────────────────────
         astar_blocked = (self._astar_failed_goal == goal)
+        print(f"DEBUG: astar_blocked={astar_blocked}, astar={self._astar}, path_len={len(self._path)}, jump_failed={self._jump_failed_goal == goal}")
 
         if self._jump_state != "IDLE":
+            print(f"DEBUG: jump_state={self._jump_state}, calling try_jumping")
             jump_dir = self._try_jumping_mechanic(c, goal, w, h)
             if jump_dir is not None:
                 return jump_dir
         elif (astar_blocked
             and self._astar is None
             and not self._path
-            and self._jump_failed_goal != goal
-            and self.wall_steps > 15):
+            and self._jump_failed_goal != goal):
+            print("DEBUG: astar_blocked and conditions met, calling try_jumping")
             jump_dir = self._try_jumping_mechanic(c, goal, w, h)
             if jump_dir is not None:
                 return jump_dir
@@ -659,6 +661,7 @@ class BugNav:
                         if c.is_in_vision(nb) and _passable(c, nb):
                             walkable.add(nb)
                             queue.append(nb)
+        print(f"DEBUG: walkable_count={len(walkable)}")
 
         # 2. Posiciones válidas para el launcher: adyacentes al bot
         launcher_candidates: list[Position] = []
@@ -676,6 +679,7 @@ class BugNav:
                     launcher_candidates.append(adj)
                 elif et == EntityType.ROAD and team == c.get_team():
                     launcher_candidates.append(adj)
+        print(f"DEBUG: launcher_candidates_count={len(launcher_candidates)}")
 
         if not launcher_candidates:
             return None
@@ -685,7 +689,9 @@ class BugNav:
         best_landing: Position | None = None
         best_dist = current_dist - 4  # mejora mínima exigida
 
-        for tile in c.get_nearby_tiles():
+        nearby_tiles = c.get_nearby_tiles()
+        print(f"DEBUG: nearby_tiles_count={len(nearby_tiles)}")
+        for tile in nearby_tiles:
             if tile in walkable:
                 continue
             if not c.is_tile_passable(tile):
@@ -696,6 +702,7 @@ class BugNav:
             for lpos in launcher_candidates:
                 dsq = lpos.distance_squared(tile)
                 if 0 < dsq <= LAUNCHER_RANGE_SQ:
+                    print(f"DEBUG: found best_landing={tile}")
                     best_dist = tile_dist
                     best_landing = tile
                     break
