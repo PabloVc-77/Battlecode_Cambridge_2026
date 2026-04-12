@@ -1,0 +1,8 @@
+{
+  "track_id": "merge_trucha_v2_6_20260412",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-04-12T13:40:00Z",
+  "updated_at": "2026-04-12T13:40:00Z",
+  "description": "Combine trucha_v2_2_catapulta and trucha_v2_4 into trucha_v2_6, integrate catapulta pathfinding, and optimize navigation."
+}
