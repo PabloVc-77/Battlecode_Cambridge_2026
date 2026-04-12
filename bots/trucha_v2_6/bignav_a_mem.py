@@ -68,7 +68,7 @@ from map_symmetry import MapSymmetry
 # Constantes
 # ---------------------------------------------------------------------------
 
-CPU_BUDGET_US = 1200      # µs máximos por tick antes de ceder el control
+CPU_BUDGET_US = 800       # µs máximos por tick antes de ceder el control
 BFS_MAX_NODES = 80        # BFS rápido cuando goal está en visión
 
 # Opportunistic launch: usar launcher aliado cercano aunque A* no haya fallado
@@ -285,6 +285,7 @@ class BugNav:
         # esperamos a ser lanzados (solo se coloca una vez por oportunidad).
         self._opp_marker_placed: bool = False
         self._opp_launcher_pos: Position | None = None  # launcher que usamos
+        self._opp_launch_check_cooldown: int = 0
 
         # BFS rápido (goal en visión)
         self._bfs_path: list = []
@@ -328,6 +329,7 @@ class BugNav:
         self._map_walls:    set = set()
         self._map_ores:     set = set()
         self._map_launchers: set = set()
+        self._update_map_cooldown: int = 0
 
         # -------------------------------------------------------------------------
 
@@ -541,6 +543,11 @@ class BugNav:
           - Si estamos adyacentes: colocamos marker y esperamos (CENTRE).
           - Si no estamos adyacentes: caminamos hacia él.
         """
+        if self._opp_launch_check_cooldown > 0:
+            self._opp_launch_check_cooldown -= 1
+            return None
+        self._opp_launch_check_cooldown = 3 # Chequear cada 4 ticks
+        
         current = c.get_position()
         current_dist = current.distance_squared(goal)
         
@@ -551,6 +558,10 @@ class BugNav:
         
         # Consolidamos launchers visibles desde el mapa persistente
         visible_launchers = [p for p in self._map_launchers if c.is_in_vision(p)]
+        # Optimizamos: solo miramos los 5 launchers más cercanos para no saturar CPU
+        if len(visible_launchers) > 5:
+            visible_launchers.sort(key=lambda p: current.distance_squared(p))
+            visible_launchers = visible_launchers[:5]
         
         for lpos in visible_launchers:
             # Para este launcher, buscar su mejor aterrizaje
