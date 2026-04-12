@@ -150,49 +150,43 @@ Before marking any task complete, verify:
 
 ## Development Commands
 
-**AI AGENT INSTRUCTION: This section should be adapted to the project's specific language, framework, and build tools.**
-
 ### Setup
 ```bash
-# Example: Commands to set up the development environment (e.g., install dependencies, configure database)
-# e.g., for a Node.js project: npm install
-# e.g., for a Go project: go mod tidy
+# Install the competition CLI
+pip install cambc
 ```
 
 ### Daily Development
 ```bash
-# Example: Commands for common daily tasks (e.g., start dev server, run tests, lint, format)
-# e.g., for a Node.js project: npm run dev, npm test, npm run lint
-# e.g., for a Go project: go run main.go, go test ./..., go fmt ./...
+# Run a match between two bots (e.g. current vs previous version)
+cambc run bots/<current_bot> bots/<opponent_bot>
+
+# Run a match and automatically open the visualizer
+cambc run bots/<current_bot> bots/<opponent_bot> --watch
+
+# View a specific replay file
+cambc watch replay.replay26
 ```
 
 ### Before Committing
 ```bash
-# Example: Commands to run all pre-commit checks (e.g., format, lint, type check, run tests)
-# e.g., for a Node.js project: npm run check
-# e.g., for a Go project: make check (if a Makefile exists)
+# Run a match against the baseline bot to ensure no regressions
+cambc run bots/<current_bot> bots/trucha_v2_4 --watch
+
+# Check performance (time limits) on remote hardware
+cambc test-run bots/<current_bot> bots/trucha_v2_4
 ```
 
 ## Testing Requirements
 
-### Unit Testing
-- Every module must have corresponding tests.
-- Use appropriate test setup/teardown mechanisms (e.g., fixtures, beforeEach/afterEach).
-- Mock external dependencies.
-- Test both success and failure cases.
+### Manual Visual Testing
+- Every behavior change must be verified by running a match.
+- Use the `cambc watch` tool to inspect unit actions (movement, building, resource collection).
+- Verify that units do not "get stuck" or waste turns due to navigation errors.
 
-### Integration Testing
-- Test complete user flows
-- Verify database transactions
-- Test authentication and authorization
-- Check form submissions
-
-### Mobile Testing
-- Test on actual iPhone when possible
-- Use Safari developer tools
-- Test touch interactions
-- Verify responsive layouts
-- Check performance on 3G/4G
+### Remote Performance Testing
+- Use `cambc test-run` to ensure the bot stays under the **2ms per round** CPU limit.
+- Local runs do NOT enforce time limits; remote tests are mandatory for validation.
 
 ## Code Review Process
 

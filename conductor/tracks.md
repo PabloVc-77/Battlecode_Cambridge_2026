@@ -4,5 +4,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: Improve pathfinding using launchers (build and reuse).**
+- [~] **Track: Improve pathfinding using launchers (build and reuse).**
   *Link: [./tracks/launcher_pathfinding_20260412/](./tracks/launcher_pathfinding_20260412/)*
