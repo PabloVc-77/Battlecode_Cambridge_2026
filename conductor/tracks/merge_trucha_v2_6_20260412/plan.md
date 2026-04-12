@@ -5,14 +5,14 @@
 - [x] Task: Analyze `trucha_v2_2_catapulta` pathfinding modules for extraction (including launcher.py) 2414a0f
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Analysis' (Protocol in workflow.md) c681011
 
-## Phase 2: Core Integration (TDD)
+## Phase 2: Core Integration (TDD) [checkpoint: 26f5854]
 - [x] Task: Port pathfinding module to `trucha_v2_6` 9ea0877
     - [x] Write unit tests for pathfinding module integration
     - [x] Implement/port pathfinding logic from `v2_2_catapulta`
 - [x] Task: Update unit controllers in `v2_6` to use new pathfinding 09b0a32
     - [x] Write tests for unit movement using the new system
     - [x] Update controller logic to call the new navigation API
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Integration (TDD)' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Core Integration (TDD)' (Protocol in workflow.md) 26f5854
 
 ## Phase 3: Optimization & Refinement
 - [ ] Task: Optimize navigation for faster resource discovery
