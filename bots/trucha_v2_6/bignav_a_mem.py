@@ -323,8 +323,11 @@ class BugNav:
         self._map_passable: set = set()
         self._map_blocked:  set = set()
         self._map_walls:    set = set()
+        self._map_ores:     set = set()
+        self._map_launchers: set = set()
 
-    # -------------------------------------------------------------------------
+        # -------------------------------------------------------------------------
+
     def _init_dims(self, c: Controller):
         if self._w == 0:
             self._w = c.get_map_width()
@@ -344,6 +347,15 @@ class BugNav:
                 self._map_passable.discard(pos)
                 if env == Environment.WALL:
                     self._map_walls.add(pos)
+                elif env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
+                    self._map_ores.add(pos)
+            
+            # Track Launchers independently
+            bid = c.get_tile_building_id(pos)
+            if bid is not None and c.get_entity_type(bid) == EntityType.LAUNCHER:
+                self._map_launchers.add(pos)
+            else:
+                self._map_launchers.discard(pos)
 
     def reset(self):
         self.mode = "GOAL"
