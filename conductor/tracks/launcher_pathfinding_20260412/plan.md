@@ -9,14 +9,14 @@
     - [x] Add resource check to the jumping mechanic logic
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Persistent Mapping and Resource Management' (Protocol in workflow.md) 5b85858
 
-## Phase 2: Launcher Construction and Obstacle Traversal
+## Phase 2: Launcher Construction and Obstacle Traversal [checkpoint: 139c80a]
 - [x] Task: Refine launcher construction logic for blocked paths f1ec016
     - [x] Write tests for detecting blocked paths and triggering launcher construction
     - [x] Implement robust construction conditions prioritizing A* failures over simple obstacles
 - [x] Task: Integrate launcher range awareness into landing target selection 33e2a8c
     - [x] Write tests verifying valid landing targets within the extended circular range (robot vision + 1)
     - [x] Update `_find_unreachable_better_tile` to accurately model this increased range
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Launcher Construction and Obstacle Traversal' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Launcher Construction and Obstacle Traversal' (Protocol in workflow.md) 139c80a
 
 ## Phase 3: Launcher Reuse and Optimization
 - [ ] Task: Enable discovery and reuse of existing launchers during traversal
