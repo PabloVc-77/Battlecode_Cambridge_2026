@@ -70,8 +70,7 @@ from map_symmetry import MapSymmetry
 
 CPU_BUDGET_US = 800       # µs máximos por tick antes de ceder el control
 BFS_MAX_NODES = 80        # BFS rápido cuando goal está en visión
-WALKABLE_BFS_MAX = 60     # Nodos máximos del BFS de accesibilidad en _find_unreachable_better_tile
-JUMP_CHECK_COOLDOWN = 5   # Ticks entre comprobaciones del trigger de salto
+WALKABLE_BFS_MAX = 60
 
 # Opportunistic launch: usar launcher aliado cercano aunque A* no haya fallado
 OPP_LAUNCH_MIN_GOAL_SQ        = 25  # dist² mínima al goal para plantearse el salto
@@ -270,17 +269,19 @@ class BugNav:
         self._path: list = []
         self._astar_failed_goal: Position | None = None
 
-        # ── Jumping Mechanic ──────────────────────────────────────────────────
+        # ── Jumping Mechanic (integrada desde v3.0) ──────────────────────────
         self._jump_failed_goal: Position | None = None
         self._jump_state = "IDLE"          # IDLE | BUILDING | MARKER_PLACED
         self._jump_landing_target: Position | None = None
-        self._jump_launcher_pos: Position | None = None  # posición canónica del launcher
         self._jump_wait_ticks = 0
-        self._jump_check_cooldown: int = 0  # cooldown del trigger independiente
         # Posiciones desde las que ya saltamos para el goal actual.
         # Evita el bucle saltar→aterrizar→volver→saltar desde el mismo sitio.
         # Se limpia en _full_reset (cuando cambia el goal).
         self._jumped_from_positions: set = set()
+
+        # En __init__, dentro del bloque Jumping Mechanic:
+        self._jump_launcher_pos: Position | None = None   # launcher canónico
+        self._building_just_built: bool = False           # gracia post-build tick
 
         # ── Opportunistic launch ──────────────────────────────────────────────
         # Cuando el bot pasa junto a un launcher aliado existente y su goal
@@ -289,8 +290,9 @@ class BugNav:
         # esperamos a ser lanzados (solo se coloca una vez por oportunidad).
         self._opp_marker_placed: bool = False
         self._opp_launcher_pos: Position | None = None  # launcher que usamos
-        self._opp_wait_ticks: int = 0
         self._opp_launch_check_cooldown: int = 0
+        # En el bloque Opportunistic launch:
+        self._opp_wait_ticks: int = 0  
 
         # BFS rápido (goal en visión)
         self._bfs_path: list = []
@@ -390,13 +392,13 @@ class BugNav:
         self._jump_failed_goal = None
         self._jump_state = "IDLE"
         self._jump_landing_target = None
-        self._jump_launcher_pos = None
+        self._jump_launcher_pos = None       
         self._jump_wait_ticks = 0
-        self._jump_check_cooldown = 0
+        self._building_just_built = False   
         self._jumped_from_positions = set()
         self._opp_marker_placed = False
         self._opp_launcher_pos = None
-        self._opp_wait_ticks = 0
+        self._opp_wait_ticks = 0            
 
     def _switch_hand(self):
         self._use_left_hand = not self._use_left_hand
@@ -452,8 +454,9 @@ class BugNav:
             self._bfs_path = []
             self._jump_state = "IDLE"
             self._jump_landing_target = None
-            self._jump_launcher_pos = None
             self._jump_wait_ticks = 0
+            self._jump_launcher_pos = None  
+            self._building_just_built = False
             self._building_wait_ticks = 0
             self.start = current
             self.reset()
@@ -461,6 +464,7 @@ class BugNav:
         # ── Detectar aterrizaje post-salto oportunista ────────────────────────
         if self._opp_marker_placed:
             if current != self.start:
+                # Fuimos lanzados: resetear todo
                 self._opp_marker_placed = False
                 self._opp_launcher_pos = None
                 self._opp_wait_ticks = 0
@@ -471,20 +475,15 @@ class BugNav:
                 self.start = current
                 self.reset()
             else:
+                # No nos lanzaron aún: contar ticks de espera
                 self._opp_wait_ticks += 1
                 if self._opp_wait_ticks > 5:
+                    # El launcher no nos lanzó, abandonar esta oportunidad
                     self._opp_marker_placed = False
                     self._opp_launcher_pos = None
                     self._opp_wait_ticks = 0
 
-        # ── Si ya estamos en un salto activo, continuarlo ────────────────────
-        if self._jump_state != "IDLE":
-            jump_dir = self._try_jumping_mechanic(c, goal, w, h)
-            if jump_dir is not None:
-                return jump_dir
-            # _try_jumping_mechanic devolvió None → abandonó el salto; continuar normal
-
-        # ── 0. Opportunistic launch (launchers ya existentes) ─────────────────
+        # ── 0. Opportunistic launch ───────────────────────────────────────────
         if (self._jump_state == "IDLE"
                 and not self._opp_marker_placed
                 and current.distance_squared(goal) > OPP_LAUNCH_MIN_GOAL_SQ):
@@ -508,29 +507,22 @@ class BugNav:
         else:
             self._bfs_path = []
 
-        # ── 2. Trigger de salto independiente (BFS de visión) ─────────────────
-        # No depende del A*: si existe un tile walkable más cercano al goal
-        # que no sea alcanzable caminando desde aquí, construir un launcher.
-        if (self._jump_state == "IDLE"
-                and self._jump_failed_goal != goal
-                and current not in self._jumped_from_positions):
-            if self._jump_check_cooldown > 0:
-                self._jump_check_cooldown -= 1
-            else:
-                self._jump_check_cooldown = JUMP_CHECK_COOLDOWN
-                landing, launcher_cand = self._find_unreachable_better_tile(
-                    c, current, goal, w, h)
-                if landing is not None:
-                    self._jump_landing_target = landing
-                    self._jump_launcher_pos = launcher_cand
-                    self._building_wait_ticks = 0
-                    self._jump_state = "BUILDING"
-                    jump_dir = self._try_jumping_mechanic(c, goal, w, h)
-                    if jump_dir is not None:
-                        return jump_dir
-
-        # ── 3. A* incremental en background ──────────────────────────────────
+        # ── 2. A* incremental en background ──────────────────────────────────
         astar_blocked = (self._astar_failed_goal == goal)
+
+        if self._jump_state != "IDLE":
+            print(f"DEBUG: jump_state={self._jump_state}, calling try_jumping")
+            jump_dir = self._try_jumping_mechanic(c, goal, w, h)
+            if jump_dir is not None:
+                return jump_dir
+        elif (astar_blocked
+            and self._astar is None
+            and not self._path
+            and self._jump_failed_goal != goal):
+            print("DEBUG: astar_blocked and conditions met, calling try_jumping")
+            jump_dir = self._try_jumping_mechanic(c, goal, w, h)
+            if jump_dir is not None:
+                return jump_dir
 
         if not astar_blocked and self._astar is None and not self._path:
             self._astar = AStarState(current, goal)
@@ -553,7 +545,7 @@ class BugNav:
             else:
                 return self._consume_path(c, self._path, four_dirs, w, h)
 
-        # ── 4. BugNav mientras A* calcula ─────────────────────────────────────
+        # ── 3. BugNav mientras A* calcula ─────────────────────────────────────
         return self._bugnav_step(c, goal, four_dirs)
 
     # =========================================================================
@@ -570,49 +562,40 @@ class BugNav:
         if self._opp_launch_check_cooldown > 0:
             self._opp_launch_check_cooldown -= 1
             return None
-        self._opp_launch_check_cooldown = 3 # Chequear cada 4 ticks
-        
+        self._opp_launch_check_cooldown = 3
+
         current = c.get_position()
         current_dist = current.distance_squared(goal)
-        
-        # 1. Buscar el mejor launcher en memoria que esté en visión
-        best_launcher: Position | None = None
-        best_landing: Position | None = None
-        best_total_dist = current_dist - OPP_LAUNCH_MIN_IMPROVEMENT_SQ
-        
-        # Consolidamos launchers visibles desde el mapa persistente
+
         visible_launchers = [p for p in self._map_launchers if c.is_in_vision(p)]
-        # Optimizamos: solo miramos los 5 launchers más cercanos para no saturar CPU
+        if not visible_launchers:
+            return None
         if len(visible_launchers) > 5:
             visible_launchers.sort(key=lambda p: current.distance_squared(p))
             visible_launchers = visible_launchers[:5]
-        
-        # Precalcular tiles pasables una sola vez (evita get_nearby_tiles() por launcher)
+
+        # FIX CPU: precalcular UNA SOLA VEZ, fuera del bucle de launchers
         passable_tiles = [t for t in c.get_nearby_tiles() if c.is_tile_passable(t)]
 
+        best_launcher = None
+        best_landing = None
+        best_total_dist = current_dist - OPP_LAUNCH_MIN_IMPROVEMENT_SQ
+
         for lpos in visible_launchers:
-            # Para este launcher, buscar su mejor aterrizaje
-            best_l_target: Position | None = None
-            best_l_dist = current_dist # debe mejorar al menos algo
-            
+            best_l_target = None
+            best_l_dist = current_dist
+            # FIX CPU: iterar passable_tiles (ya calculado) en vez de get_nearby_tiles() de nuevo
             for tile in passable_tiles:
-                # can_launch comprueba adyacencia lpos-bot y rango lpos-tile.
-                # Como el bot puede no estar adyacente aún, simulamos el salto
-                # comprobando dist² lpos-tile <= 26
                 d_launch = lpos.distance_squared(tile)
                 if 0 < d_launch <= 26:
                     d_goal = tile.distance_squared(goal)
                     if d_goal < best_l_dist:
                         best_l_dist = d_goal
                         best_l_target = tile
-            
-            if best_l_target is not None:
-                # El "beneficio" real debe considerar el camino al launcher
-                # Pero por simplicidad, si mejora significativamente, vamos.
-                if best_l_dist < best_total_dist:
-                    best_total_dist = best_l_dist
-                    best_launcher = lpos
-                    best_landing = best_l_target
+            if best_l_target is not None and best_l_dist < best_total_dist:
+                best_total_dist = best_l_dist
+                best_launcher = lpos
+                best_landing = best_l_target
 
         if best_launcher is None:
             return None
@@ -657,27 +640,21 @@ class BugNav:
         return None
 
     # =========================================================================
-    # Jumping Mechanic
+    # Jumping Mechanic (v3.0)
     # =========================================================================
-
     def _find_unreachable_better_tile(
-        self, c: Controller, current: Position, goal: Position, w: int, h: int
-    ) -> tuple[Position | None, Position | None]:
+        self, c: Controller, current, goal, w, h
+    ) -> tuple[Position | None, Position | None]:   # FIX: devuelve (landing, launcher_cand)
+        LAUNCHER_RANGE_SQ = 26
         """
         Busca el mejor tile de aterrizaje que:
-          1. No sea alcanzable caminando desde current (BFS acotado en visión).
-          2. Sea lanzable desde alguna posición adyacente al bot donde se pueda
-             construir un launcher (casilla vacía o road propia, o launcher aliado).
-          3. Mejore la distancia al goal respecto a la posición actual.
-
-        Reutiliza la misma lógica de passability que _bfs_in_vision: solo tiles
-        en visión y passable (is_tile_passable | is_tile_empty).
-
-        Returns (landing_tile, launcher_candidate_pos) o (None, None).
+          1. No sea alcanzable caminando desde current.
+          2. Sea lanzable desde alguna posición adyacente al bot donde
+             se pueda construir un launcher (casilla vacía o road propia).
+          3. Mejore significativamente la distancia al goal.
         """
-        LAUNCHER_RANGE_SQ = 26
 
-        # 1. BFS acotado: tiles walkable alcanzables desde current
+        # FIX CPU: BFS acotado con WALKABLE_BFS_MAX
         walkable: set = {current}
         queue = [current]
         head = 0
@@ -691,11 +668,7 @@ class BugNav:
                         walkable.add(nb)
                         queue.append(nb)
 
-        # 2. Posiciones candidatas para colocar el launcher: adyacentes al bot
-        #    - tile vacío (se puede construir)
-        #    - road aliada (se puede demoler y construir)
-        #    - launcher aliado ya existente (se usa directamente)
-        launcher_candidates: list[Position] = []
+        launcher_candidates = []
         for d in _ALL_DIRS:
             adj = current.add(d)
             if not _in_bounds(adj, w, h) or not c.is_in_vision(adj):
@@ -706,25 +679,21 @@ class BugNav:
             else:
                 et = c.get_entity_type(bid)
                 team = c.get_team(bid)
-                if (et == EntityType.LAUNCHER and team == c.get_team()):
+                if et == EntityType.LAUNCHER and team == c.get_team():
                     launcher_candidates.append(adj)
-                elif (et == EntityType.ROAD and team == c.get_team()):
+                elif et == EntityType.ROAD and team == c.get_team():
                     launcher_candidates.append(adj)
 
         if not launcher_candidates:
-            return None, None
+            return None, None   # FIX: devuelve tupla
 
-        # 3. Buscar el mejor tile de aterrizaje: passable, no walkable, más cerca
-        #    del goal que current, y alcanzable por algún launcher_candidate.
         current_dist = current.distance_squared(goal)
-        best_landing: Position | None = None
-        best_launcher_cand: Position | None = None
-        best_dist = current_dist  # cualquier mejora basta (mínimo: 1 tile)
+        best_landing = None
+        best_launcher_cand = None   # FIX: rastrear qué candidato cubre el landing
+        best_dist = current_dist - 4
 
         for tile in c.get_nearby_tiles():
-            if tile in walkable:
-                continue
-            if not c.is_tile_passable(tile):
+            if tile in walkable or not c.is_tile_passable(tile):
                 continue
             tile_dist = tile.distance_squared(goal)
             if tile_dist >= best_dist:
@@ -734,36 +703,34 @@ class BugNav:
                 if 0 < dsq <= LAUNCHER_RANGE_SQ:
                     best_dist = tile_dist
                     best_landing = tile
-                    best_launcher_cand = lpos
+                    best_launcher_cand = lpos   # FIX: guardar el candidato exacto
                     break
 
-        return best_landing, best_launcher_cand
+        return best_landing, best_launcher_cand   # FIX: devuelve tupla
 
-    def _try_jumping_mechanic(self, c: Controller, goal: Position,
-                               w: int, h: int) -> Direction | None:
-        """
-        Máquina de estados para ejecutar un salto con launcher.
-
-        Estados:
-          IDLE        → no hay salto en curso (no debería llegar aquí desde moveTo)
-          BUILDING    → construyendo el launcher o esperando recursos; una vez
-                        que el launcher existe, colocar el marker y pasar a MARKER_PLACED
-          MARKER_PLACED → marker colocado, esperando a ser lanzado
-
-        El caller (moveTo) es responsable de llamar a este método solo cuando
-        _jump_state != IDLE, o justo después de activarlo desde el trigger.
-
-        Devuelve Direction a seguir, o None si el salto debe abandonarse.
-        """
+    def _try_jumping_mechanic(self, c, goal, w, h):
         current = c.get_position()
         LAUNCHER_RANGE_SQ = 26
         ACTION_RADIUS_SQ = 2
 
-        landing = self._jump_landing_target
-        canonical_lpos = self._jump_launcher_pos
+        # IDLE: evaluar
+        if self._jump_state == "IDLE":
+            if current in self._jumped_from_positions:
+                return None
+            # FIX: desempaquetar tupla
+            landing, launcher_cand = self._find_unreachable_better_tile(c, current, goal, w, h)
+            if landing is None:
+                return None
+            self._jump_landing_target = landing
+            self._jump_launcher_pos = launcher_cand   # FIX: guardar canónico
+            self._building_wait_ticks = 0
+            self._building_just_built = False
 
-        # ── Buscar el launcher en su posición canónica ────────────────────────
-        launcher_pos: Position | None = None
+        landing = self._jump_landing_target
+        canonical_lpos = self._jump_launcher_pos   # FIX
+
+        # Buscar launcher: primero en posición canónica
+        launcher_pos = None
         if canonical_lpos is not None and _in_bounds(canonical_lpos, w, h):
             bid = c.get_tile_building_id(canonical_lpos)
             if (bid is not None
@@ -771,8 +738,7 @@ class BugNav:
                     and c.get_team(bid) == c.get_team()):
                 launcher_pos = canonical_lpos
 
-        # Si no está en la canónica, buscar cualquier launcher adyacente que
-        # cubra el landing (puede que haya uno preexistente en otra casilla)
+        # Si no, buscar adyacente que cubra el landing
         if launcher_pos is None:
             for d in _ALL_DIRS:
                 adj = current.add(d)
@@ -782,18 +748,21 @@ class BugNav:
                 if (bid is not None
                         and c.get_entity_type(bid) == EntityType.LAUNCHER
                         and c.get_team(bid) == c.get_team()):
-                    if landing is None or (0 < adj.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
+                    if landing is not None and 0 < adj.distance_squared(landing) <= LAUNCHER_RANGE_SQ:
                         launcher_pos = adj
-                        self._jump_launcher_pos = adj  # actualizar canónico
+                        self._jump_launcher_pos = adj   # actualizar canónico
                         break
 
-        # ──────────────────────────────────────────────────────────────────────
-        # RAMA A: no hay launcher → construirlo
-        # ──────────────────────────────────────────────────────────────────────
+        # Construir si no existe
         if launcher_pos is None:
             self._jump_state = "BUILDING"
-            self._building_wait_ticks += 1
 
+            # FIX: si acabamos de construir este tick, esperar al siguiente
+            if self._building_just_built:
+                self._building_just_built = False
+                return Direction.CENTRE
+
+            self._building_wait_ticks += 1
             if self._building_wait_ticks > 10:
                 self._building_wait_ticks = 0
                 self._jump_state = "IDLE"
@@ -801,24 +770,8 @@ class BugNav:
                 self._jump_launcher_pos = None
                 return None
 
-            # Intentar construir en la posición canónica primero
-            build_candidates: list[Position] = []
-            if canonical_lpos is not None and _in_bounds(canonical_lpos, w, h):
-                build_candidates.append(canonical_lpos)
-            # Luego cualquier adyacente que alcance el landing
-            for d in _ALL_DIRS:
-                adj = current.add(d)
-                if adj == canonical_lpos:
-                    continue
-                if not _in_bounds(adj, w, h) or not c.is_in_vision(adj):
-                    continue
-                if landing is not None and not (0 < adj.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
-                    continue
-                build_candidates.append(adj)
-
-            for build_pos in build_candidates:
-                if not c.is_in_vision(build_pos):
-                    continue
+            build_pos = canonical_lpos
+            if build_pos is not None and _in_bounds(build_pos, w, h) and c.is_in_vision(build_pos):
                 bid = c.get_tile_building_id(build_pos)
                 if bid is not None:
                     et = c.get_entity_type(bid)
@@ -827,32 +780,58 @@ class BugNav:
                         if c.can_destroy(build_pos):
                             c.destroy(build_pos)
                         return Direction.CENTRE
-                    # Otro edificio no demolible: saltar esta posición
-                    continue
+                    if et != EntityType.LAUNCHER:
+                        # Bloqueado por otro edificio: recalcular
+                        self._jump_launcher_pos = None
+                        self._jump_state = "IDLE"
+                        return Direction.CENTRE
                 if c.can_build_launcher(build_pos):
                     res = c.get_global_resources()
-                    if res[0] >= LAUNCHER_RESERVE_THRESHOLD:
+                    if res[0] >= LAUNCHER_RESERVE_THRESHOLD and res[1] >= LAUNCHER_RESERVE_THRESHOLD:
                         c.build_launcher(build_pos)
-                        self._jump_launcher_pos = build_pos
                         self._building_wait_ticks = 0
-                        # El launcher se construyó este tick; el marker se
-                        # colocará en el siguiente tick cuando launcher_pos != None
+                        self._building_just_built = True   # FIX
                         return Direction.CENTRE
                     else:
-                        # Sin recursos: abandonar el intento de construcción
                         self._jump_state = "IDLE"
-                        return None
+                        return Direction.CENTRE
+            else:
+                # Canónica no visible: buscar alternativa válida
+                for d in _ALL_DIRS:
+                    adj = current.add(d)
+                    if not _in_bounds(adj, w, h) or not c.is_in_vision(adj):
+                        continue
+                    if landing is not None and not (0 < adj.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
+                        continue
+                    bid = c.get_tile_building_id(adj)
+                    if bid is not None:
+                        et = c.get_entity_type(bid)
+                        tm = c.get_team(bid)
+                        if et == EntityType.ROAD and tm == c.get_team():
+                            if c.can_destroy(adj): c.destroy(adj)
+                            return Direction.CENTRE
+                        else:
+                            continue
+                    if c.can_build_launcher(adj):
+                        res = c.get_global_resources()
+                        if res[0] >= LAUNCHER_RESERVE_THRESHOLD and res[1] >= LAUNCHER_RESERVE_THRESHOLD:
+                            c.build_launcher(adj)
+                            self._jump_launcher_pos = adj
+                            self._building_wait_ticks = 0
+                            self._building_just_built = True   # FIX
+                            return Direction.CENTRE
+                        else:
+                            self._jump_state = "IDLE"
+                            return Direction.CENTRE
+            return Direction.CENTRE
 
-            return Direction.CENTRE  # esperando un hueco libre
-
-        # ──────────────────────────────────────────────────────────────────────
-        # RAMA B: launcher existe → colocar marker o esperar lanzamiento
-        # ──────────────────────────────────────────────────────────────────────
+        # Launcher encontrado
         self._building_wait_ticks = 0
+        self._building_just_built = False
 
-        # Verificar que el launcher alcanza el landing; si no, recalcular
+        # Verificar rango al landing
         if landing is not None and not (0 < launcher_pos.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
-            new_landing, new_cand = self._find_unreachable_better_tile(c, current, goal, w, h)
+            new_landing, new_launcher = self._find_unreachable_better_tile(c, current, goal, w, h)
             if new_landing is None or not (0 < launcher_pos.distance_squared(new_landing) <= LAUNCHER_RANGE_SQ):
                 self._jump_state = "IDLE"
                 self._jump_failed_goal = goal
@@ -860,47 +839,31 @@ class BugNav:
                 return None
             self._jump_landing_target = new_landing
             landing = new_landing
-            if new_cand is not None:
-                self._jump_launcher_pos = new_cand
+            if new_launcher is not None:
+                self._jump_launcher_pos = new_launcher
 
-        # Comprobar si el marker ya está colocado (búsqueda en tiles adyacentes
-        # al launcher, incluyendo la posición del propio bot)
+        # Buscar marker existente
         expected_val = landing.x * 1000 + landing.y if landing is not None else -1
-        marker_found = False
+        marker_pos = None
         for d in _ALL_DIRS:
             adj = launcher_pos.add(d)
-            if not _in_bounds(adj, w, h) or not c.is_in_vision(adj):
-                continue
+            if not _in_bounds(adj, w, h) or not c.is_in_vision(adj): continue
+            if adj == current: continue
             bid = c.get_tile_building_id(adj)
-            if bid is None:
-                continue
-            if c.get_entity_type(bid) != EntityType.MARKER:
-                continue
-            if c.get_team(bid) != c.get_team():
-                continue
+            if bid is None: continue
+            if c.get_entity_type(bid) != EntityType.MARKER: continue
+            if c.get_team(bid) != c.get_team(): continue
             if c.get_marker_value(bid) == expected_val:
-                marker_found = True
-                break
-        # También comprobar la posición del bot mismo
-        if not marker_found:
-            bid = c.get_tile_building_id(current)
-            if (bid is not None
-                    and c.get_entity_type(bid) == EntityType.MARKER
-                    and c.get_team(bid) == c.get_team()
-                    and c.get_marker_value(bid) == expected_val):
-                marker_found = True
+                marker_pos = adj; break
 
-        if marker_found:
-            # Marker presente → seguir esperando a ser lanzado
+        if marker_pos is not None:
             self._jump_state = "MARKER_PLACED"
             self._jump_wait_ticks = 0
             return Direction.CENTRE
 
-        # Marker no encontrado estando en MARKER_PLACED → el launcher lo consumió
         if self._jump_state == "MARKER_PLACED":
             self._jump_wait_ticks += 1
             if self._jump_wait_ticks > 3:
-                # Timeout: el launcher no nos lanzó
                 self._jumped_from_positions.add(current)
                 self._jump_state = "IDLE"
                 self._jump_wait_ticks = 0
@@ -910,51 +873,35 @@ class BugNav:
                 return None
             return Direction.CENTRE
 
-        # ── Colocar el marker ─────────────────────────────────────────────────
+        # Colocar marker (lógica de prioridades igual que antes)
+        self._jump_state = "BUILDING"
         t = landing if landing is not None else goal
         valor = t.x * 1000 + t.y
         placed = False
 
-        # Prioridad 1: tile adyacente al launcher que también esté en radio del bot
         for d in _ALL_DIRS:
             adj = launcher_pos.add(d)
-            if not _in_bounds(adj, w, h):
-                continue
-            if adj == launcher_pos:
-                continue
-            if current.distance_squared(adj) > ACTION_RADIUS_SQ:
-                continue
+            if not _in_bounds(adj, w, h): continue
+            if adj == current or adj == launcher_pos: continue
+            if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
             if c.can_place_marker(adj):
-                c.place_marker(adj, valor)
-                placed = True
-                break
-
-        # Prioridad 2: cualquier tile en radio de acción del bot
+                c.place_marker(adj, valor); placed = True; break
         if not placed:
             for d in _ALL_DIRS:
                 adj = current.add(d)
-                if not _in_bounds(adj, w, h):
-                    continue
-                if adj == launcher_pos:
-                    continue
-                if current.distance_squared(adj) > ACTION_RADIUS_SQ:
-                    continue
+                if not _in_bounds(adj, w, h): continue
+                if adj == launcher_pos: continue
+                if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
                 if c.can_place_marker(adj):
-                    c.place_marker(adj, valor)
-                    placed = True
-                    break
-
-        # Prioridad 3: en la propia posición del bot
+                    c.place_marker(adj, valor); placed = True; break
         if not placed and c.can_place_marker(current):
-            c.place_marker(current, valor)
-            placed = True
+            c.place_marker(current, valor); placed = True
 
         if placed:
             self._jump_state = "MARKER_PLACED"
             self._jump_wait_ticks = 0
             return Direction.CENTRE
 
-        # No se pudo colocar marker este tick
         self._jump_wait_ticks += 1
         if self._jump_wait_ticks > 5:
             self._jump_state = "IDLE"
