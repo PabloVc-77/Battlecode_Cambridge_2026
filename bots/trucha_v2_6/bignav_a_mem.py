@@ -339,6 +339,11 @@ class BugNav:
             self._h = c.get_map_height()
 
     def _update_map(self, c: Controller):
+        if self._update_map_cooldown > 0:
+            self._update_map_cooldown -= 1
+            return
+        self._update_map_cooldown = 1 # Actualizar cada 2 ticks
+        
         w, h = self._w, self._h
         for pos in c.get_nearby_tiles():
             env = c.get_tile_env(pos)
@@ -492,7 +497,6 @@ class BugNav:
 
         # ── 2. A* incremental en background ──────────────────────────────────
         astar_blocked = (self._astar_failed_goal == goal)
-        print(f"DEBUG: astar_blocked={astar_blocked}, astar={self._astar}, path_len={len(self._path)}, jump_failed={self._jump_failed_goal == goal}")
 
         if self._jump_state != "IDLE":
             print(f"DEBUG: jump_state={self._jump_state}, calling try_jumping")
@@ -700,7 +704,6 @@ class BugNav:
             for lpos in launcher_candidates:
                 dsq = lpos.distance_squared(tile)
                 if 0 < dsq <= LAUNCHER_RANGE_SQ:
-                    print(f"DEBUG: found best_landing={tile}")
                     best_dist = tile_dist
                     best_landing = tile
                     break
