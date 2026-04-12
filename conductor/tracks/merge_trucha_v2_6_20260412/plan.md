@@ -1,7 +1,7 @@
 # Implementation Plan: Merge and Optimize trucha_v2_6
 
 ## Phase 1: Environment Setup & Analysis
-- [ ] Task: Create `bots/trucha_v2_6` directory and initialize with `v2_4` baseline
+- [x] Task: Create `bots/trucha_v2_6` directory and initialize with `v2_4` baseline 9be1d70
 - [ ] Task: Analyze `trucha_v2_2_catapulta` pathfinding modules for extraction
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Analysis' (Protocol in workflow.md)
 
