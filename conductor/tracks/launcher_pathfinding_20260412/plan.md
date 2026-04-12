@@ -18,14 +18,14 @@
     - [x] Update `_find_unreachable_better_tile` to accurately model this increased range
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Launcher Construction and Obstacle Traversal' (Protocol in workflow.md) 139c80a
 
-## Phase 3: Launcher Reuse and Optimization [checkpoint: c4304e1]
+## Phase 3: Launcher Reuse and Optimization [checkpoint: 65b379b]
 - [x] Task: Enable discovery and reuse of existing launchers during traversal 55ef0e6
     - [x] Write tests for navigating to and utilizing a recorded, existing launcher
     - [x] Modify pathfinding logic to actively seek and utilize previously mapped launchers
 - [x] Task: Optimize pathfinding performance with launcher integrations 6f859c9
     - [x] Write performance benchmarks for the updated pathfinding calculations
     - [x] Profile and refine the interaction between the persistent map and the jump logic to ensure it stays under the 2ms CPU limit
-- [x] Task: Conductor - User Manual Verification 'Phase 3: Launcher Reuse and Optimization' (Protocol in workflow.md) c4304e1
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Launcher Reuse and Optimization' (Protocol in workflow.md) 65b379b
 
 ## Phase 4: Final Validation
 - [ ] Task: Run full-match simulations against the baseline `v2_6` bot to verify improvements
