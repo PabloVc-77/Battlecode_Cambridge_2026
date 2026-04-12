@@ -4,5 +4,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [ ] **Track: Combine trucha_v2_2_catapulta and trucha_v2_4 into trucha_v2_6, integrate catapulta pathfinding, and optimize navigation.**
-  *Link: [./tracks/merge_trucha_v2_6_20260412/](./tracks/merge_trucha_v2_6_20260412/)*
+- [ ] **Track: Improve pathfinding using launchers (build and reuse).**
+  *Link: [./tracks/launcher_pathfinding_20260412/](./tracks/launcher_pathfinding_20260412/)*
