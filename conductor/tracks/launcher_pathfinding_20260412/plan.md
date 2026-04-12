@@ -13,9 +13,9 @@
 - [x] Task: Refine launcher construction logic for blocked paths f1ec016
     - [x] Write tests for detecting blocked paths and triggering launcher construction
     - [x] Implement robust construction conditions prioritizing A* failures over simple obstacles
-- [ ] Task: Integrate launcher range awareness into landing target selection
-    - [ ] Write tests verifying valid landing targets within the extended circular range (robot vision + 1)
-    - [ ] Update `_find_unreachable_better_tile` to accurately model this increased range
+- [x] Task: Integrate launcher range awareness into landing target selection 33e2a8c
+    - [x] Write tests verifying valid landing targets within the extended circular range (robot vision + 1)
+    - [x] Update `_find_unreachable_better_tile` to accurately model this increased range
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Launcher Construction and Obstacle Traversal' (Protocol in workflow.md)
 
 ## Phase 3: Launcher Reuse and Optimization
