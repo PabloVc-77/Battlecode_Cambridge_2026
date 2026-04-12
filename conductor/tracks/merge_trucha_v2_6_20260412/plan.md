@@ -9,9 +9,9 @@
 - [x] Task: Port pathfinding module to `trucha_v2_6` 9ea0877
     - [x] Write unit tests for pathfinding module integration
     - [x] Implement/port pathfinding logic from `v2_2_catapulta`
-- [ ] Task: Update unit controllers in `v2_6` to use new pathfinding
-    - [ ] Write tests for unit movement using the new system
-    - [ ] Update controller logic to call the new navigation API
+- [x] Task: Update unit controllers in `v2_6` to use new pathfinding 09b0a32
+    - [x] Write tests for unit movement using the new system
+    - [x] Update controller logic to call the new navigation API
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Integration (TDD)' (Protocol in workflow.md)
 
 ## Phase 3: Optimization & Refinement
