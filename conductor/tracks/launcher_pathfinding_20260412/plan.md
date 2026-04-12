@@ -10,9 +10,9 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Persistent Mapping and Resource Management' (Protocol in workflow.md) 5b85858
 
 ## Phase 2: Launcher Construction and Obstacle Traversal
-- [ ] Task: Refine launcher construction logic for blocked paths
-    - [ ] Write tests for detecting blocked paths and triggering launcher construction
-    - [ ] Implement robust construction conditions prioritizing A* failures over simple obstacles
+- [x] Task: Refine launcher construction logic for blocked paths f1ec016
+    - [x] Write tests for detecting blocked paths and triggering launcher construction
+    - [x] Implement robust construction conditions prioritizing A* failures over simple obstacles
 - [ ] Task: Integrate launcher range awareness into landing target selection
     - [ ] Write tests verifying valid landing targets within the extended circular range (robot vision + 1)
     - [ ] Update `_find_unreachable_better_tile` to accurately model this increased range
