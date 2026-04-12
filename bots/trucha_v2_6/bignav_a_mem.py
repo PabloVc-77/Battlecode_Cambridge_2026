@@ -777,9 +777,10 @@ class BugNav:
                         self._building_wait_ticks = 0
                         return Direction.CENTRE
                     else:
-                        # Si no hay recursos suficientes, abandonamos este intento de salto por ahora
+                        # Si no hay recursos, no nos quedamos en estado BUILDING.
+                        # Devolvemos CENTRE para que _bugnav_step se encargue.
                         self._jump_state = "IDLE"
-                        return None
+                        return Direction.CENTRE
 
             return Direction.CENTRE
 
