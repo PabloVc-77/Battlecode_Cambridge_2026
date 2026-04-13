@@ -469,19 +469,14 @@ class BugNav:
             self.start = current
             self.prevGoal = goal
 
-        # ── Registrar posición actual en el área visitada del goal ────────────
-        # Expandimos dist²<=2 (los 8 vecinos de _ALL_DIRS: dist²=1 cardinales,
-        # dist²=2 diagonales) para que la comprobación en
-        # _find_unreachable_better_tile sea un simple set lookup O(1).
-        if current not in self._goal_visited_area:
-            self._goal_visited_area.add(current)
-            for d in _ALL_DIRS:
-                nb = current.add(d)
-                if _in_bounds(nb, w, h):
-                    self._goal_visited_area.add(nb)
-
-
         if self._jump_state == "MARKER_PLACED" and current != self.start:
+            for pos in (self.start, current):
+                if pos is not None:
+                    self._goal_visited_area.add(pos)
+                    for d in _ALL_DIRS:
+                        nb = pos.add(d)
+                        if _in_bounds(nb, w, h):
+                            self._goal_visited_area.add(nb)
             if self.start is not None:
                 self._jumped_from_positions.add(self.start)
             self._astar_failed_goal = None
@@ -662,27 +657,21 @@ class BugNav:
         # 2. Si estamos adyacentes, colocar marker
         if current.distance_squared(best_launcher) <= 2:
             valor = _encode_nav_marker(c.get_id(), best_landing)
-            ACTION_RADIUS_SQ = 2
+            LAUNCHER_VISION_SQ = 26
             placed = False
-            # Intentar colocar marker (mismo orden de prioridad que antes)
             for d in _ALL_DIRS:
-                adj = best_launcher.add(d)
+                adj = current.add(d)
                 if not _in_bounds(adj, w, h): continue
-                if adj == current or adj == best_launcher: continue
-                if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
+                if adj == best_launcher: continue
+                if current.distance_squared(adj) > 2: continue
+                if best_launcher.distance_squared(adj) > LAUNCHER_VISION_SQ: continue
                 if c.can_place_marker(adj):
                     c.place_marker(adj, valor)
                     placed = True; break
             if not placed:
-                for d in _ALL_DIRS:
-                    adj = current.add(d)
-                    if not _in_bounds(adj, w, h): continue
-                    if adj == best_launcher: continue
-                    if current.distance_squared(adj) > ACTION_RADIUS_SQ: continue
-                    if c.can_place_marker(adj):
-                        c.place_marker(adj, valor); placed = True; break
-            if not placed and c.can_place_marker(current):
-                c.place_marker(current, valor); placed = True
+                if best_launcher.distance_squared(current) <= LAUNCHER_VISION_SQ:
+                    if c.can_place_marker(current):
+                        c.place_marker(current, valor); placed = True
             
             if placed:
                 self._opp_marker_placed = True
@@ -981,7 +970,6 @@ class BugNav:
             if self._building_wait_ticks > 20:
                 self._building_wait_ticks = 0
                 self._jump_state = "IDLE"
-                self._jump_failed_goal = goal
                 self._jump_launcher_pos = None
                 return None
             best_adj: Position | None = None
@@ -1014,15 +1002,14 @@ class BugNav:
         # Verificar que el launcher alcanza el landing; si no, recalcular
         if landing is not None and not (0 < launcher_pos.distance_squared(landing) <= LAUNCHER_RANGE_SQ):
             new_landing, new_cand = self._find_unreachable_better_tile(c, current, goal, w, h)
-            if new_landing is None or not (0 < launcher_pos.distance_squared(new_landing) <= LAUNCHER_RANGE_SQ):
-                self._jump_state = "IDLE"
-                self._jump_failed_goal = goal
-                self._jump_launcher_pos = None
-                return None
-            self._jump_landing_target = new_landing
-            landing = new_landing
-            if new_cand is not None:
-                self._jump_launcher_pos = new_cand
+            if new_landing is not None and 0 < launcher_pos.distance_squared(new_landing) <= LAUNCHER_RANGE_SQ:
+                self._jump_landing_target = new_landing
+                landing = new_landing
+                if new_cand is not None:
+                    self._jump_launcher_pos = new_cand
+            else:
+                self._jump_landing_target = goal
+                landing = goal
 
         # Comprobar si el marker ya está colocado (búsqueda en tiles adyacentes
         # al launcher, incluyendo la posición del propio bot).
@@ -1076,43 +1063,36 @@ class BugNav:
             return Direction.CENTRE
 
         # ── Colocar el marker ─────────────────────────────────────────────────
+        # El bot coloca el marker en cualquier tile dentro de su ACTION_RADIUS_SQ
+        # que también esté dentro del LAUNCHER_VISION_RADIUS_SQ del launcher,
+        # para que el launcher pueda leerlo.
+        LAUNCHER_VISION_SQ = 26  # LAUNCHER_VISION_RADIUS_SQ
         t = landing if landing is not None else goal
         valor = _encode_nav_marker(c.get_id(), t)
         placed = False
 
-        # Prioridad 1: tile adyacente al launcher que también esté en radio del bot
+        # Escanear todos los tiles dentro del radio de acción del bot
         for d in _ALL_DIRS:
-            adj = launcher_pos.add(d)
+            adj = current.add(d)
             if not _in_bounds(adj, w, h):
+                continue
+            if current.distance_squared(adj) > ACTION_RADIUS_SQ:
                 continue
             if adj == launcher_pos:
                 continue
-            if current.distance_squared(adj) > ACTION_RADIUS_SQ:
+            if launcher_pos.distance_squared(adj) > LAUNCHER_VISION_SQ:
                 continue
             if c.can_place_marker(adj):
                 c.place_marker(adj, valor)
                 placed = True
                 break
 
-        # Prioridad 2: cualquier tile en radio de acción del bot
+        # Intentar en la posición del bot mismo
         if not placed:
-            for d in _ALL_DIRS:
-                adj = current.add(d)
-                if not _in_bounds(adj, w, h):
-                    continue
-                if adj == launcher_pos:
-                    continue
-                if current.distance_squared(adj) > ACTION_RADIUS_SQ:
-                    continue
-                if c.can_place_marker(adj):
-                    c.place_marker(adj, valor)
+            if launcher_pos.distance_squared(current) <= LAUNCHER_VISION_SQ:
+                if c.can_place_marker(current):
+                    c.place_marker(current, valor)
                     placed = True
-                    break
-
-        # Prioridad 3: en la propia posición del bot
-        if not placed and c.can_place_marker(current):
-            c.place_marker(current, valor)
-            placed = True
 
         if placed:
             self._jump_state = "MARKER_PLACED"
@@ -1123,7 +1103,6 @@ class BugNav:
         self._jump_wait_ticks += 1
         if self._jump_wait_ticks > 5:
             self._jump_state = "IDLE"
-            self._jump_failed_goal = goal
             self._jump_wait_ticks = 0
             return None
         return Direction.CENTRE
