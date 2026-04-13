@@ -505,7 +505,7 @@ class BugNav:
                 self.reset()
             else:
                 self._opp_wait_ticks += 1
-                if self._opp_wait_ticks > 5:
+                if self._opp_wait_ticks > 3:
                     self._opp_marker_placed = False
                     self._opp_launcher_pos = None
                     self._opp_wait_ticks = 0
@@ -607,7 +607,7 @@ class BugNav:
         if self._opp_launch_check_cooldown > 0:
             self._opp_launch_check_cooldown -= 1
             return None
-        self._opp_launch_check_cooldown = 3 # Chequear cada 4 ticks
+        self._opp_launch_check_cooldown = (1 if self.mode == "WALL" else 3)
         
         current = c.get_position()
         current_dist = current.distance_squared(goal)
@@ -623,33 +623,24 @@ class BugNav:
         if len(visible_launchers) > 5:
             visible_launchers.sort(key=lambda p: current.distance_squared(p))
             visible_launchers = visible_launchers[:5]
-        
-        # Precalcular tiles pasables una sola vez (evita get_nearby_tiles() por launcher)
-        passable_tiles = [t for t in c.get_nearby_tiles() if c.is_tile_passable(t)]
+
+        LAUNCHER_RANGE_SQ = 26
 
         for lpos in visible_launchers:
-            # Para este launcher, buscar su mejor aterrizaje
-            best_l_target: Position | None = None
-            best_l_dist = current_dist # debe mejorar al menos algo
-            
-            for tile in passable_tiles:
-                # can_launch comprueba adyacencia lpos-bot y rango lpos-tile.
-                # Como el bot puede no estar adyacente aún, simulamos el salto
-                # comprobando dist² lpos-tile <= 26
-                d_launch = lpos.distance_squared(tile)
-                if 0 < d_launch <= 26:
-                    d_goal = tile.distance_squared(goal)
-                    if d_goal < best_l_dist:
-                        best_l_dist = d_goal
-                        best_l_target = tile
-            
-            if best_l_target is not None:
-                # El "beneficio" real debe considerar el camino al launcher
-                # Pero por simplicidad, si mejora significativamente, vamos.
-                if best_l_dist < best_total_dist:
-                    best_total_dist = best_l_dist
-                    best_launcher = lpos
-                    best_landing = best_l_target
+            best_l_dist = current_dist
+
+            # tiles en rango del launcher, no del bot
+            for tile in c.get_nearby_tiles():
+                if not c.is_tile_passable(tile):
+                    continue
+
+                if lpos.distance_squared(tile) > LAUNCHER_RANGE_SQ:
+                    continue
+
+                d_goal = tile.distance_squared(goal)
+
+                if d_goal < best_l_dist:
+                    best_l_dist = d_goal
 
         if best_launcher is None:
             return None
@@ -680,12 +671,7 @@ class BugNav:
                 return Direction.CENTRE
         
         # 3. Si no estamos adyacentes, caminar hacia el launcher
-        dir_to_launcher = current.direction_to(best_launcher)
-        if _can_move(c, dir_to_launcher, w, h):
-            return dir_to_launcher
-        
-        # Si no podemos movernos directo, BugNav se encargará en el fallback
-        return None
+        return self._bugnav_step(c, best_launcher, False)
 
     # =========================================================================
     # Jumping Mechanic
