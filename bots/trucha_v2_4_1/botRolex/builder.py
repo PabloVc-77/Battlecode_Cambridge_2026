@@ -600,7 +600,7 @@ class Harvester:
                 return  # Aún no lo hemos roto
 
         if place == current:
-            dir = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
+            dir = self.navegador.moveTo(c, self.spawn, False)
             move_pos = current.add(dir)
             if c.can_build_road(move_pos):
                 c.build_road(move_pos)
@@ -1349,7 +1349,7 @@ class Harvester:
             return False
 
         if current == objetivo:
-            dir = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
+            dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
             next_pos = current.add(dir)
             if c.can_build_road(next_pos):
                 c.build_road(next_pos)

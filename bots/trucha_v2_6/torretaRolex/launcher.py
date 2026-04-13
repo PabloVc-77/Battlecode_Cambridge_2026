@@ -3,12 +3,12 @@ from cambc import Controller, Direction, EntityType, Environment, Position
 Launcher — lanza bots aliados atascados o que pasan cerca con un goal lejano,
 y aleja bots enemigos del core propio.
 
-Protocolo de marker (encoding x*1000+y):
-  - El bot coloca un marker con su destino deseado (casilla de aterrizaje).
-  - El launcher lo lee, calcula el mejor lanzamiento hacia ese destino,
-    destruye el marker y lanza al bot.
-  - Markers con valor > 100_000 son de otros sistemas (axionita, etc.)
-    y se ignoran.
+Protocolo de marker (encoding NAV_MARKER_PREFIX + botID*10000 + x*100 + y):
+  - El bot coloca un marker con su destino deseado codificando su propio ID
+    y la casilla de aterrizaje.
+  - El launcher verifica el prefijo, extrae el botID y confirma que el bot
+    adyacente tiene ese ID antes de lanzarlo.
+  - Markers sin el prefijo NAV_MARKER_PREFIX son de otros sistemas y se ignoran.
 """
 # ─────────────────────────────────────────────────────────────────────────────
 #  CONSTANTES
@@ -22,6 +22,9 @@ DIRECTIONS_ALL = [
 
 # Distancia² mínima que el lanzamiento debe mejorar respecto a la posición actual
 MIN_IMPROVEMENT_SQ = 4
+
+# Encoding de nav markers — debe coincidir con bignav_a_mem.py
+NAV_MARKER_PREFIX = 2_000_000_000
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HELPERS
@@ -37,9 +40,15 @@ def adjacent_positions(pos: Position):
         result.append(Position(pos.x + dx, pos.y + dy))
     return result
 
-def decode_goal(value: int) -> Position:
-    """Decodifica el valor del marker a una Position objetivo (encoding x*1000+y)."""
-    return Position(value // 1000, value % 1000)
+def is_nav_marker(value: int) -> bool:
+    return value >= NAV_MARKER_PREFIX
+
+def decode_nav_marker(value: int) -> tuple[int, Position]:
+    """Devuelve (bot_id, landing_position). Solo llamar si is_nav_marker() es True."""
+    remainder = value - NAV_MARKER_PREFIX
+    bot_id = remainder // 10_000
+    coords  = remainder % 10_000
+    return bot_id, Position(coords // 100, coords % 100)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  LAUNCHER
@@ -101,7 +110,7 @@ class Launcher:
             bot_pos = c.get_position(unit_id)
 
             # Buscar marker de destino adyacente al launcher o al bot
-            goal, marker_pos = self._find_goal_marker(c, my_pos, bot_pos, my_team)
+            goal, marker_pos = self._find_goal_marker(c, my_pos, bot_pos, unit_id, my_team)
             if goal is None:
                 continue
 
@@ -111,33 +120,37 @@ class Launcher:
                 if marker_pos is not None and c.can_destroy(marker_pos):
                     c.destroy(marker_pos)
                 continue
+            
+            if c.can_launch(bot_pos, best_target):
+                c.launch(bot_pos, best_target)
+            else:
+                return False
 
             # Destruir el marker antes de lanzar
             if marker_pos is not None and c.can_destroy(marker_pos):
                 c.destroy(marker_pos)
 
-            if c.can_launch(bot_pos, best_target):
-                c.launch(bot_pos, best_target)
-                return True
-
-        return False
+        return True
 
     def _find_goal_marker(
         self,
         c: Controller,
         launcher_pos: Position,
         bot_pos: Position,
+        bot_unit_id: int,
         my_team: int,
     ) -> tuple[Position | None, Position | None]:
         """
-        Busca un marker aliado con encoding x*1000+y en:
+        Busca un marker aliado con el prefijo NAV_MARKER_PREFIX en:
           - Casillas adyacentes (8 dirs) al launcher.
           - Casillas adyacentes (8 dirs) al bot.
-          - La posición exacta del bot (puede poner marker en dist²=0).
-          - La posición exacta del launcher (el bot puede ponerlo ahí también).
+          - La posición exacta del bot.
+          - La posición exacta del launcher.
 
-        Ignora markers con valor > 100_000 (pertenecen a otros sistemas,
-        como los markers de axionita que usan 833*10000+...).
+        Valida que el botID codificado en el marker coincide con bot_unit_id
+        para evitar lanzar bots no destinatarios de este launcher.
+
+        Ignora markers que no tengan el prefijo NAV_MARKER_PREFIX.
 
         Devuelve (goal_pos, marker_tile) o (None, None).
         """
@@ -147,13 +160,11 @@ class Launcher:
         # Conjunto de tiles a inspeccionar (sin duplicados)
         search_tiles: set[tuple[int, int]] = set()
 
-        # Adyacentes al launcher y al bot
         for center in (launcher_pos, bot_pos):
             for adj in adjacent_positions(center):
                 if 0 <= adj.x < w and 0 <= adj.y < h:
                     search_tiles.add((adj.x, adj.y))
 
-        # Posición exacta del bot y del launcher (el bot puede colocar el marker aquí)
         for pos in (bot_pos, launcher_pos):
             if 0 <= pos.x < w and 0 <= pos.y < h:
                 search_tiles.add((pos.x, pos.y))
@@ -170,10 +181,12 @@ class Launcher:
             if c.get_team(bid) != my_team:
                 continue
             value = c.get_marker_value(bid)
-            # Filtrar markers de otros sistemas (axionita: 833*10000+... > 100_000)
-            if value > 100_000:
+            if not is_nav_marker(value):
                 continue
-            goal = decode_goal(value)
+            encoded_bot_id, goal = decode_nav_marker(value)
+            # Validar que el marker pertenece exactamente a este bot
+            if encoded_bot_id != bot_unit_id:
+                continue
             # Validar coordenadas dentro del mapa
             if not (0 <= goal.x < w and 0 <= goal.y < h):
                 continue
