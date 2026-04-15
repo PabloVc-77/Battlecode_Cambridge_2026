@@ -30,6 +30,12 @@ NAV_MARKER_PREFIX = 2_000_000_000
 #  HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_in_bounds(c: Controller, pos: Position) -> bool:
+    # Kept for backward compatibility; use self._in_bounds() inside the class.
+    w = c.get_map_width()
+    h = c.get_map_height()
+    return pos.x < w and pos.y >= 0 and pos.y < h and pos.x >= 0
+
 def dist_sq(a: Position, b: Position) -> int:
     return (a.x - b.x) ** 2 + (a.y - b.y) ** 2
 
@@ -57,33 +63,15 @@ def decode_nav_marker(value: int) -> tuple[int, Position]:
 class Launcher:
     def __init__(self, c: Controller):
         current = c.get_position()
-        self.semi_spawn = current  # fallback por defecto
-        self.my_bridge = current   # fallback
+        self.semi_core = current  # fallback por defecto
 
-        buildings = c.get_nearby_buildings()
-        my_bridges = []
-        for b in buildings:
-            if c.get_entity_type(b) == EntityType.BRIDGE and c.get_team(b) == c.get_team():
-                my_bridges.append(b)
-
-        my_bridges.sort(key=lambda p: current.distance_squared(c.get_position(p)))
-
-        if len(my_bridges) > 0:
-            my_b = my_bridges[0]
-            self.my_bridge = c.get_position(my_b)
-            next_bridge = c.get_bridge_target(my_b)
-
-            while c.is_in_vision(next_bridge):
-                b_id = c.get_tile_building_id(next_bridge)
-                if b_id is None or c.get_entity_type(b_id) != EntityType.BRIDGE:
-                    break
-                next_bridge = c.get_bridge_target(b_id)
-
-            self.semi_spawn = next_bridge
+        self.calculate_semi_core(c)
 
     def run(self, c: Controller):
         my_pos = c.get_position()
         my_team = c.get_team()
+        self.calculate_semi_core(c)
+        c.draw_indicator_dot(self.semi_core, 245, 39, 39)
 
         # ── PRIORIDAD 1: Ayudar a bots aliados (atascados u oportunistas) ─────
         if self._try_help_allies(c, my_pos, my_team):
@@ -91,6 +79,114 @@ class Launcher:
 
         # ── PRIORIDAD 2: Atacar enemigos ──────────────────────────────────────
         self._try_attack_enemies(c, my_pos, my_team)
+
+    def calculate_semi_core(self, c: Controller) -> None:
+        current = c.get_position()
+        buildings = c.get_nearby_buildings()
+        my_transports = []
+
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+
+        for b in buildings:
+            etype = c.get_entity_type(b)
+            if etype in transport_types and c.get_team(b) == c.get_team():
+                my_transports.append(b)
+            if etype == EntityType.CORE and c.get_team(b) == c.get_team():
+                self.semi_core = c.get_position(b)
+                return
+
+        my_transports.sort(key=lambda p: current.distance_squared(c.get_position(p)))
+
+        if len(my_transports) > 0:
+            my_b = my_transports[0]
+            next_target = self.next_target(c, my_b=my_b)
+
+            visited: set[tuple[int, int]] = {(next_target.x, next_target.y)}
+
+            while c.is_in_vision(next_target):
+                next_b = self.next_target(c, my_b)
+                if next_b is None:
+                    break
+                key = (next_b.x, next_b.y)
+                if key in visited:
+                    break
+                visited.add(key)
+                next_target = next_b
+
+            if current.distance_squared(next_target) > current.distance_squared(self.semi_core):
+                self.semi_core = next_target
+        else:
+            if current.distance_squared(current) > current.distance_squared(self.semi_core):
+                self.semi_core = current
+
+    def next_target(self, c: Controller, my_b: EntityType):
+        etype = c.get_entity_type(my_b)
+        check_pos = c.get_position(my_b)
+        transport_types = (
+            EntityType.BRIDGE,
+            EntityType.CONVEYOR,
+            EntityType.ARMOURED_CONVEYOR,
+            EntityType.SPLITTER,
+        )
+
+        next_target = None
+        if etype == EntityType.BRIDGE:
+            next_target = c.get_bridge_target(my_b)
+        elif etype in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR):
+            next_target = check_pos.add(c.get_direction(my_b))
+        else:
+            # Es un splitter
+            d = c.get_direction(my_b)
+            possible_dirs = [d, d.rotate_left().rotate_left(), d.rotate_right().rotate_right()]
+            out_of_vision_fallback = None
+            next_target = None
+            for dir in possible_dirs:
+                ck_pos = check_pos.add(dir)
+                if not _is_in_bounds(c, ck_pos):
+                    continue
+                if not c.is_in_vision(ck_pos):
+                    out_of_vision_fallback = ck_pos
+                    continue
+                if c.get_tile_env(ck_pos) == Environment.WALL:
+                    continue
+
+                bid = c.get_tile_building_id(ck_pos)
+                etype = c.get_entity_type(bid)
+                if etype in transport_types and c.get_team() == c.get_team(bid):
+                    if etype in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR):
+                        b_dir = c.get_direction(bid)
+                        if b_dir == ck_pos.direction_to(check_pos):
+                            continue
+                    elif etype == EntityType.SPLITTER:
+                        b_dir = c.get_direction(bid)
+                        if b_dir.opposite() == ck_pos.direction_to(check_pos):
+                            continue
+                    elif etype == EntityType.BRIDGE:
+                        targ = c.get_bridge_target(bid)
+                        if targ == check_pos:
+                            continue
+                    next_target = ck_pos
+                    break
+                elif c.is_tile_passable(ck_pos):
+                    next_target = ck_pos
+
+            if next_target is None:
+                next_target = out_of_vision_fallback
+
+        if next_target is None:
+            return ck_pos
+        
+        return next_target
+
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    #  LAUNCHER ALLIES
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def _try_help_allies(self, c: Controller, my_pos: Position, my_team: int) -> bool:
         """
@@ -225,46 +321,33 @@ class Launcher:
                 best_pos = tile
 
         return best_pos
+    
+    # ─────────────────────────────────────────────────────────────────────────────
+    #  LAUNCHER ENEMIES
+    # ─────────────────────────────────────────────────────────────────────────────
 
     def _try_attack_enemies(self, c: Controller, my_pos: Position, my_team: int):
         """Lanza bots enemigos adyacentes lo más lejos posible del core aliado."""
-        core_pos = self._find_allied_core(c, my_team)
 
         for unit_id in c.get_nearby_units(2):
+            if c.get_entity_type(unit_id) != EntityType.BUILDER_BOT:
+                continue
             if c.get_team(unit_id) == my_team:
                 continue
             enemy_pos = c.get_position(unit_id)
-            target = self._farthest_from_core(c, enemy_pos, core_pos)
+            target = self._farthest_from_core(c, enemy_pos)
+            if enemy_pos is not None:
+                c.draw_indicator_dot(enemy_pos, 242, 39, 245)
+            if target is not None:
+                c.draw_indicator_dot(target, 242, 245, 39)
+
             if target is not None and c.can_launch(enemy_pos, target):
                 c.launch(enemy_pos, target)
                 return
 
-    def _find_allied_core(self, c: Controller, my_team: int) -> Position | None:
-        for bid in c.get_nearby_buildings():
-            if c.get_team(bid) == my_team and c.get_entity_type(bid) == EntityType.CORE:
-                return c.get_position(bid)
-        return None
-
-    def _farthest_from_core(self, c: Controller, bot_pos: Position,
-                             core_pos: Position | None) -> Position | None:
-        best_pos: Position | None = None
-        best_dist: int = -1
-
-        for tile in c.get_nearby_tiles():
-            if not c.is_tile_passable(tile):
-                continue
-            if not c.can_launch(bot_pos, tile):
-                continue
-            d = dist_sq(tile, core_pos) if core_pos is not None else dist_sq(tile, bot_pos)
-            if d > best_dist:
-                best_dist = d
-                best_pos = tile
-
-        # Fallback: alejar del semi_spawn
-        if best_pos is None:
-            viable = [t for t in c.get_nearby_tiles() if c.can_launch(bot_pos, t)]
-            if viable:
-                viable.sort(key=lambda p: self.semi_spawn.distance_squared(p), reverse=True)
-                return viable[0]
-
-        return best_pos
+    def _farthest_from_core(self, c: Controller, bot_pos: Position) -> Position | None:
+        viable = [t for t in c.get_nearby_tiles() if c.can_launch(bot_pos, t)]
+        if not viable:
+            return None
+        viable.sort(key=lambda p: self.semi_core.distance_squared(p), reverse=True)
+        return viable[0]
