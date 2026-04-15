@@ -52,6 +52,11 @@ class Healer:
         self.patrol_index = 0
 
         # P1: counter turret
+        # Lista de torretas enemigas activas que ya tienen su fuente bloqueada
+        # con barrier (pendientes de upgrade a sentinel).
+        # Cada entrada es (fuente_pos, sentinel_dir, turret_pos).
+        self._pending_sentinel_upgrades: list[tuple] = []
+        # Torreta actualmente en proceso de bloqueo (la que estamos yendo a bloquear)
         self._counter_target_pos = None
         self._counter_dir = None
         self._counter_enemy_turret = None
@@ -184,6 +189,7 @@ class Healer:
         return c.get_entity_type(bid) in ENEMY_TURRET_TYPES and c.get_team(bid) != c.get_team()
 
     def _counter_sentinel_done(self, c: Controller):
+        """Comprueba si la fuente del target activo ya tiene sentinel aliado."""
         if self._counter_target_pos is None:
             return True
         if not c.is_in_vision(self._counter_target_pos):
@@ -192,6 +198,45 @@ class Healer:
         if bid is None:
             return False
         return c.get_entity_type(bid) == EntityType.SENTINEL and c.get_team(bid) == c.get_team()
+
+    def _source_is_blocked(self, c: Controller, source_pos: Position) -> bool:
+        """
+        Devuelve True si la fuente ya tiene barrier o sentinel aliado,
+        de forma que la torreta no recibe suministros.
+        """
+        if not c.is_in_vision(source_pos):
+            return False
+        bid = c.get_tile_building_id(source_pos)
+        if bid is None:
+            return False
+        etype = c.get_entity_type(bid)
+        team = c.get_team(bid)
+        return team == c.get_team() and etype in (EntityType.BARRIER, EntityType.SENTINEL)
+
+    def _collect_unblocked_turrets(self, c: Controller, builds: list) -> list[tuple]:
+        """
+        Devuelve lista de (fuente_pos, sentinel_dir, turret_pos) para todas las
+        torretas enemigas visibles cuya fuente existe y NO está bloqueada aún.
+        Ordenadas por distancia al bot actual.
+        """
+        current = c.get_position()
+        result = []
+        seen_sources = set()
+        enemy_turrets = self._get_enemy_turrets(c, builds)
+        for turret_pos in enemy_turrets:
+            fuente = self._find_next_in_chain(c, turret_pos, include_enemies=True)
+            if fuente is None:
+                continue
+            if fuente in seen_sources:
+                continue
+            seen_sources.add(fuente)
+            if self._source_is_blocked(c, fuente):
+                continue
+            dist = current.distance_squared(fuente)
+            sentinel_dir = fuente.direction_to(turret_pos)
+            result.append((dist, fuente, sentinel_dir, turret_pos))
+        result.sort()
+        return [(f, sd, tp) for _, f, sd, tp in result]
 
     def _get_enemy_turrets(self, c: Controller, builds: list[EntityType]):
         result = []
@@ -206,60 +251,115 @@ class Healer:
     # P1 – Counter turret
     # =========================================================================
 
-    def _update_counter_target(self, c: Controller, builds: list[EntityType]):
-        current = c.get_position()
-        enemy_turrets = self._get_enemy_turrets(c, builds)
-        if not enemy_turrets:
+    def _update_counter_target(self, c: Controller, builds: list):
+        """Selecciona la torreta sin bloquear más cercana como target activo."""
+        unblocked = self._collect_unblocked_turrets(c, builds)
+        if not unblocked:
+            self._counter_target_pos = None
+            self._counter_dir = None
+            self._counter_enemy_turret = None
             return
-        enemy_turrets.sort(key=lambda pos: current.distance_squared(pos))
-        for turret_pos in enemy_turrets:
-            fuente = self._find_next_in_chain(c, turret_pos, include_enemies=True)
-            if fuente is None:
-                continue
-            self._counter_target_pos = fuente
-            self._counter_dir = fuente.direction_to(turret_pos)
-            self._counter_enemy_turret = turret_pos
-            return
+        fuente, sentinel_dir, turret_pos = unblocked[0]
+        self._counter_target_pos = fuente
+        self._counter_dir = sentinel_dir
+        self._counter_enemy_turret = turret_pos
 
-    def _run_counter_turret(self, c: Controller, builds: list[EntityType]):
+    def _run_counter_turret(self, c: Controller, builds: list) -> bool:
+        """
+        Prioridad 1: bloquear TODAS las fuentes de torretas enemigas.
+
+        Flujo:
+          a) Si hay torretas sin bloquear (sin barrier ni sentinel): ir a la
+             más cercana y colocar lo que se pueda (sentinel si hay Ti, si no
+             barrier). Si solo se pone una barrier, guardar (pos, dir) en
+             _pending_sentinel_upgrades para más tarde.
+          b) Solo cuando NO quede ninguna torreta sin bloquear: recorrer
+             _pending_sentinel_upgrades y sustituir barriers por sentinels
+             (de uno en uno, la primera que tenga aún barrier aliada).
+
+        Devuelve True si P1 consumió el turno.
+        """
         current = c.get_position()
-        if self._counter_target_pos is not None:
-            if (not self._enemy_turret_still_alive(c, self._counter_enemy_turret)
-                    or self._counter_sentinel_done(c)):
-                self._counter_target_pos = None
-                self._counter_dir = None
-                self._counter_enemy_turret = None
-            else:
-                c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
-                # Construir barrera si no hay dinero para sentinel, o sentinel si ya hay dinero
-                titanium = c.get_global_resources()[0]
-                precio_sentinel = c.get_sentinel_cost()[0]
-                precio_barrier = c.get_barrier_cost()[0]
-                done = False
-                
-                if titanium >= precio_sentinel:
-                    done = self.construir(c, self._counter_target_pos,
-                                        EntityType.SENTINEL, self._counter_dir)
-                elif titanium >= precio_barrier:
-                    self.construir(c, self._counter_target_pos,
-                                        EntityType.BARRIER)
-                    
+        titanium = c.get_global_resources()[0]
+        precio_sentinel = c.get_sentinel_cost()[0]
+        precio_barrier = c.get_barrier_cost()[0]
+
+        # ── Limpiar pending upgrades cuya torreta ya no existe o ya es sentinel ──
+        still_pending = []
+        for (src_pos, sdir, tpos) in self._pending_sentinel_upgrades:
+            # Si la torreta enemiga ya murió: descartar
+            if not self._enemy_turret_still_alive(c, tpos):
+                continue
+            # Si ya tiene sentinel: descartar
+            if c.is_in_vision(src_pos):
+                bid = c.get_tile_building_id(src_pos)
+                if bid is not None:
+                    etype = c.get_entity_type(bid)
+                    team = c.get_team(bid)
+                    if team == c.get_team() and etype == EntityType.SENTINEL:
+                        continue  # ya actualizado
+                    if team != c.get_team() or etype not in (EntityType.BARRIER, EntityType.SENTINEL):
+                        # La barrier fue destruida o reemplazada por enemigo: descartar
+                        continue
+            still_pending.append((src_pos, sdir, tpos))
+        self._pending_sentinel_upgrades = still_pending
+
+        # ── a) ¿Hay torretas sin bloquear? ───────────────────────────────────────
+        unblocked = self._collect_unblocked_turrets(c, builds)
+
+        if unblocked:
+            # Ir a la primera (más cercana)
+            fuente, sentinel_dir, turret_pos = unblocked[0]
+            self._counter_target_pos = fuente
+            self._counter_dir = sentinel_dir
+            self._counter_enemy_turret = turret_pos
+
+            c.draw_indicator_dot(fuente, 255, 0, 0)
+
+            if titanium >= precio_sentinel:
+                # Tenemos para sentinel: colocarlo directamente
+                done = self.construir(c, fuente, EntityType.SENTINEL, sentinel_dir)
                 if done:
+                    # Limpiamos el target activo (la fuente ya está bloqueada)
                     self._counter_target_pos = None
                     self._counter_dir = None
                     self._counter_enemy_turret = None
-                return True
-
-        self._update_counter_target(c, builds)
-        if self._counter_target_pos is not None:
-            c.draw_indicator_dot(self._counter_target_pos, 255, 0, 0)
-            done = self.construir(c, self._counter_target_pos,
-                                  EntityType.SENTINEL, self._counter_dir)
-            if done:
-                self._counter_target_pos = None
-                self._counter_dir = None
-                self._counter_enemy_turret = None
+            elif titanium >= precio_barrier:
+                # Solo podemos poner barrier: colocarla y guardar para upgrade posterior
+                done = self.construir(c, fuente, EntityType.BARRIER)
+                if done:
+                    # Guardar para upgrade si no está ya en pendientes
+                    entry = (fuente, sentinel_dir, turret_pos)
+                    if entry not in self._pending_sentinel_upgrades:
+                        self._pending_sentinel_upgrades.append(entry)
+                    self._counter_target_pos = None
+                    self._counter_dir = None
+                    self._counter_enemy_turret = None
+            else:
+                # Sin recursos: moverse hacia la fuente igualmente (llegará antes)
+                if current.distance_squared(fuente) > 2:
+                    d = self.navegador.moveTo(c, fuente, four_dirs=False)
+                    nxt = current.add(d)
+                    if c.can_build_road(nxt):
+                        c.build_road(nxt)
+                    self._try_move(c, d)
             return True
+
+        # ── b) Todas bloqueadas: upgrade barriers → sentinels ────────────────────
+        self._counter_target_pos = None
+        self._counter_dir = None
+        self._counter_enemy_turret = None
+
+        if self._pending_sentinel_upgrades and titanium >= precio_sentinel:
+            src_pos, sdir, tpos = self._pending_sentinel_upgrades[0]
+            c.draw_indicator_dot(src_pos, 255, 100, 0)
+            done = self.construir(c, src_pos, EntityType.SENTINEL, sdir)
+            if done:
+                self._pending_sentinel_upgrades.pop(0)
+            return True
+
+        # Si hay pendientes pero sin recursos, no bloqueamos el turno:
+        # dejamos que patrulla/heal actúen mientras esperamos.
         return False
 
     # =========================================================================
@@ -877,8 +977,8 @@ class Healer:
             return
 
         # P2: bot enemigo en visión → splitter + sentinel
-        if self._run_intercept(c):
-            return
+        #if self._run_intercept(c):
+        #    return
 
         # P4: curar edificios aliados dañados
         damaged = self._get_damaged_targets(c)
