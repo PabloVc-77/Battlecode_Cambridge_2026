@@ -1450,11 +1450,39 @@ class BugNav:
             sorted_v = sorted(self._visited, key=lambda p: current.distance_squared(p))
             self._visited = set(sorted_v[:self._MAX_VISITED // 2])
 
+    #def _pick_explore_target(self, c: Controller) -> Position | None:
+    #    if not self._frontiers:
+    #        return None
+    #    current = c.get_position()
+    #    return min(self._frontiers, key=lambda p: current.distance_squared(p))
+
+    # Priorizar casillas no exploradas
     def _pick_explore_target(self, c: Controller) -> Position | None:
         if not self._frontiers:
             return None
+
         current = c.get_position()
-        return min(self._frontiers, key=lambda p: current.distance_squared(p))
+        w, h = self._w, self._h
+
+        best_score = float("inf")
+        best_target = None
+
+        for p in self._frontiers:
+            dist = current.distance_squared(p)
+
+            unknown_neighbors = 0
+            for d in _ALL_DIRS:
+                nb = p.add(d)
+                if 0 <= nb.x < w and 0 <= nb.y < h and nb not in self._visited:
+                    unknown_neighbors += 1
+
+            score = dist - (unknown_neighbors * 5) # Variable según veamos
+
+            if score < best_score:
+                best_score = score
+                best_target = p
+
+        return best_target
 
     def moveExplore(self, c: Controller, four_dirs: bool = False) -> Direction:
         self._init_dims(c)
