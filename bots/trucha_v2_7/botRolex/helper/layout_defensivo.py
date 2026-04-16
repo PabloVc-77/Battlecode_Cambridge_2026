@@ -179,21 +179,35 @@ def choose_rotation(c: Controller, node_pos: Position) -> str:
 
 def build_rotated_layout(c : Controller, rotation: str, core_pos: Position) -> list:
     result = []
+    barriers = []
+    no_barr = []
     for (dx, dy, etype, build_fn, direction, priority) in BASE_LAYOUT:
+        if etype == EntityType.BARRIER and dx != 0:
+            barriers.append((dx, dy, etype, build_fn, direction, priority))
+            continue
         new_dx, new_dy = rotate_offset(dx, dy, rotation)
         new_dir = rotate_dir(direction, rotation)
         if etype == EntityType.SPLITTER:
-            pos = Position(core_pos.x + dx, core_pos.y + dy)
-            c.draw_indicator_dot(pos, 39, 46, 245)
+            pos = Position(core_pos.x + new_dx, core_pos.y + new_dy)
+            #c.draw_indicator_dot(pos, 39, 46, 245)
             pos_check = pos.add(new_dir.opposite())
-            c.draw_indicator_dot(pos_check, 39, 245, 224)
+            #c.draw_indicator_dot(pos_check, 39, 245, 224)
             if not _is_in_bounds(c, pos_check) or c.get_tile_env(pos_check) == Environment.WALL:
                 # Rotar para soportar conveyors
                 if dx == 1:
                     new_dir = rotate_dir(Direction.WEST, rotation)
+                    no_barr.append((dx + 1, dy))
                 else:
                     new_dir = rotate_dir(Direction.EAST, rotation)
+                    no_barr.append((dx - 1, dy))
         result.append((new_dx, new_dy, etype, build_fn, new_dir, priority))
+    
+    for bdx, bdy, etype, build_fn, dir, priority in barriers:
+        if (bdx, bdy) in no_barr:
+            continue
+        else:
+            new_dx, new_dy = rotate_offset(bdx, bdy, rotation)
+            result.append((new_dx, new_dy, etype, build_fn, dir, priority))
     return result
 
 
