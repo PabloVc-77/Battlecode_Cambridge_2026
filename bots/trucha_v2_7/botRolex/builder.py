@@ -21,7 +21,7 @@ def revisor_casillas_extractor(c: Controller, pos: Position):
         if _is_in_bounds(c, casilla):
             if c.is_in_vision(casilla):
                 building_id = c.get_tile_building_id(casilla)
-                if building_id is not None and c.get_entity_type(building_id) in (EntityType.BRIDGE, EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER) and c.get_team(building_id) == c.get_team():
+                if building_id is not None and c.get_entity_type(building_id) in TRANSPORT_TYPES and c.get_team(building_id) == c.get_team():
                     Existe = True
                     break
             else:
@@ -29,10 +29,60 @@ def revisor_casillas_extractor(c: Controller, pos: Position):
                 break
     return Existe
 
+TRANSPORT_TYPES = (
+    EntityType.CONVEYOR,
+    EntityType.ARMOURED_CONVEYOR,
+    EntityType.BRIDGE,
+    EntityType.SPLITTER,
+)
+
 # ── Axionite bridge marker encoding ─────────────────────────────────────────
 # Format: 833_xx_yy  →  integer = 833 * 10000 + x * 100 + y
 # Works for map coordinates 0–99 in each axis.
 _AXIONITE_MARKER_IDENT = 833
+
+# ── WIP bridge marker encoding ─────────────────────────────────────────
+# WIP: Work In Progress
+_WIP_MARKER_IDENT = 999
+
+def _encode_wip_marker(bot_id: int) -> int:
+    return _WIP_MARKER_IDENT * 10000 + bot_id
+
+def _is_wip_marker(value: int) -> bool:
+    return value // 10000 == _WIP_MARKER_IDENT
+
+def _is_wip_placeholder(c: Controller, bid: int) -> bool:
+    if bid is None or c.get_team(bid) != c.get_team():
+        return False
+
+    etype = c.get_entity_type(bid)
+    if etype == EntityType.MARKER:
+        try:
+            return _is_wip_marker(c.get_marker_value(bid))
+        except Exception:
+            return False
+    if etype == EntityType.BARRIER:
+        return True
+    if etype in (EntityType.SENTINEL, EntityType.GUNNER, EntityType.BREACH):
+        return True
+    return False
+
+def _place_wip_marker(c: Controller, pos: Position) -> bool:
+    if not c.is_in_vision(pos):
+        return False
+
+    bid = c.get_tile_building_id(pos)
+    if _is_wip_placeholder(c, bid):
+        return True
+
+    if c.can_place_marker(pos):
+        c.place_marker(pos, _encode_wip_marker(c.get_id()))
+        return True
+
+    return False
+
+def _get_wip_marker_id(value: int) -> int:
+    return value % 10000
 
 def _encode_axionite_marker(pos: Position) -> int:
     return _AXIONITE_MARKER_IDENT * 10000 + pos.x * 100 + pos.y
@@ -80,13 +130,6 @@ def _is_conv_better(c: Controller, ini: Position, end: Position, layout, entity_
     queue.append((ini, []))
     visited = {ini}
 
-    transport_types = (
-        EntityType.CONVEYOR,
-        EntityType.ARMOURED_CONVEYOR,
-        EntityType.BRIDGE,
-        EntityType.SPLITTER,
-    )
-
     while queue:
         current, path = queue.popleft()
 
@@ -106,7 +149,7 @@ def _is_conv_better(c: Controller, ini: Position, end: Position, layout, entity_
                 continue
             if neighbor in layout and neighbor != end:
                 continue
-            if neighbor in transport_types and neighbor != end:
+            if neighbor in TRANSPORT_TYPES and neighbor != end:
                 continue
 
             env = c.get_tile_env(neighbor)
@@ -119,7 +162,7 @@ def _is_conv_better(c: Controller, ini: Position, end: Position, layout, entity_
                 if entity == EntityType.ROAD:
                     pass  # tratar como casilla libre
                 elif not (c.is_tile_passable(neighbor) and c.get_tile_builder_bot_id(neighbor) is None) and (entity != EntityType.BARRIER or c.get_team() != c.get_team(building_id)):
-                    if neighbor != c.get_position() and entity not in transport_types:
+                    if neighbor != c.get_position() and entity not in TRANSPORT_TYPES:
                         continue
                 elif entity in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.BRIDGE) and c.get_team() == c.get_team(building_id):
                     # Permitir si es el destino final, saltar si es nodo intermedio
@@ -393,12 +436,6 @@ class Harvester:
                 building_id = c.get_tile_building_id(tile)
 
                 if building_id is not None:
-                    transport_types = (
-                        EntityType.CONVEYOR,
-                        EntityType.ARMOURED_CONVEYOR,
-                        EntityType.BRIDGE,
-                        EntityType.SPLITTER,
-                    )
                     entity = c.get_entity_type(building_id)
                     team = c.get_team() == c.get_team(building_id)
                     if entity == EntityType.HARVESTER:
@@ -431,7 +468,7 @@ class Harvester:
                                 self.objetivos_set.discard(tile)
                                 changed = True
                             continue
-                    elif entity in transport_types and team:
+                    elif entity in TRANSPORT_TYPES and team:
                         if tile in self.recolectores_set:
                                 self.recolectores.remove(tile)
                                 self.recolectores_set.discard(tile)
@@ -469,14 +506,6 @@ class Harvester:
     # MODE 0
 
     def buscar_material(self, c: Controller, current: Position):
-
-        transport_types = (
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.BRIDGE,
-            EntityType.SPLITTER,
-        )
-
         # ── PRIORIDAD 1: detectar cadenas de transporte aliadas rotas ─────────
         # Antes de buscar ore nuevo, comprobamos si alguna cadena ya construida
         # tiene el output desconectado (casilla vacía o con elemento no-transporte).
@@ -497,7 +526,7 @@ class Harvester:
         entityID = c.get_tile_building_id(current)
         if entityID is not None:
             tileTeam = c.get_team(entityID)
-            if tileTeam != c.get_team() and c.get_entity_type(entityID) in [EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER, EntityType.BRIDGE]:
+            if tileTeam != c.get_team() and c.get_entity_type(entityID) in TRANSPORT_TYPES:
                 if c.can_fire(current):
                     c.fire(current)
                 return
@@ -607,7 +636,23 @@ class Harvester:
             if self._in_bounds(spot) and c.is_in_vision(spot):
                 something = c.get_tile_building_id(spot)
                 something2 = c.get_tile_env(spot)
-                if (something is None or c.is_tile_passable(spot) or spot == c.get_position()) and something2 != Environment.WALL:
+
+                if (something is None or c.is_tile_passable(spot) or spot == c.get_position() or c.get_entity_type(something) == EntityType.MARKER) and something2 != Environment.WALL:
+                    if something is not None and c.get_team() == c.get_team(something):
+                        etype = c.get_entity_type(something)
+                        if etype == EntityType.MARKER:
+                            if _get_wip_marker_id(c.get_marker_value(something)) == c.get_id():
+                                viable_places.insert(0, spot)
+                                break
+                            else:
+                                # id distinta
+                                self.current_target = None
+                                self.mode = 0
+                                self.last_bridge_built_pos = None
+                                self.last_conveyor_pos = None
+                                self.last_path_built = None
+                                return
+
                     if something2 not in [Environment.ORE_AXIONITE, Environment.ORE_TITANIUM]:
                         viable_places.append(spot)
                     else:
@@ -690,6 +735,8 @@ class Harvester:
                         self.conveyor_path.pop(0)
                         self.last_bridge_end = conv_pos.add(conv_dir)
                         self.last_conveyor_dir = conv_dir
+                    else:
+                        self._try_mark_path_wip(c, conv_pos)
                     self.mode = 4
                     return
 
@@ -731,6 +778,18 @@ class Harvester:
                 self.mode = 3
             else:
                 self.mode = 2
+        else:
+            if self._try_mark_path_wip(c, place):
+                if c.is_in_vision(place):
+                    mark = c.get_tile_building_id(place)
+                    val = c.get_marker_value(mark)
+                    if c.get_id() != _get_wip_marker_id(val):
+                        self.mode = 0
+                        self.last_bridge_built_pos = None
+                        self.last_conveyor_pos = None
+                        self.last_path_built = None
+                        self.current_target = None
+                        return
 
     # MODE 2
 
@@ -760,6 +819,13 @@ class Harvester:
                     c.draw_indicator_dot(current, 255, 20, 147)
                     self.defend_sentinel(c)
                     return
+        
+        if c.is_in_vision(bridge_end):
+            next_bid = c.get_tile_building_id(bridge_end)
+            if next_bid is not None and c.get_team() == c.get_team(next_bid) and c.get_entity_type(next_bid) in TRANSPORT_TYPES:
+                self.mode = 3
+                return
+
                 
         active_ends = self._active_ends
         self.reserved = False
@@ -816,6 +882,8 @@ class Harvester:
                         self.conveyor_path.pop(0)
                         self.last_bridge_end = conv_pos.add(conv_dir)
                         self.last_conveyor_dir = conv_dir
+                    else:
+                        self._try_mark_path_wip(c, conv_pos)
                     self.mode = 4
                     return
             end = target_end
@@ -860,18 +928,23 @@ class Harvester:
                 self.mode = 3
             else:
                 self.mode = 2
+        else:
+            if self._try_mark_path_wip(c, bridge_end):
+                if c.is_in_vision(bridge_end):
+                    mark = c.get_tile_building_id(bridge_end)
+                    val = c.get_marker_value(mark)
+                    if c.get_id() != _get_wip_marker_id(val):
+                        self.mode = 0
+                        self.last_bridge_built_pos = None
+                        self.last_conveyor_pos = None
+                        self.last_path_built = None
+                        self.current_target = None
+                        return
 
     # MODE 3
 
     def revisar_camino_casa(self, c: Controller):
         current = c.get_position()
-        active_ends = self._active_ends
-        transport_types = (
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.BRIDGE,
-            EntityType.SPLITTER,
-        )
 
         if self.check_pos is None:
             self.check_pos = self.last_bridge_end
@@ -884,7 +957,7 @@ class Harvester:
             self.current_target = None
             return
 
-        if self.check_pos in active_ends:
+        if self.check_pos in self.end_bridges_titanium:
             self.mode = 0
             self.check_pos = None
             self.last_bridge_end = None
@@ -909,13 +982,31 @@ class Harvester:
         building_id = c.get_tile_building_id(self.check_pos)
         entity = c.get_entity_type(building_id)
 
-        if building_id is None or entity not in transport_types:
+        if building_id is None:
             self.last_bridge_end = self.check_pos
             self.check_pos = None
             self.mode = 2
             return
 
         if c.get_team(building_id) != c.get_team():
+            self.last_bridge_end = self.check_pos
+            self.check_pos = None
+            self.mode = 2
+            return
+        
+        if ((entity == EntityType.MARKER and _is_wip_marker(c.get_marker_value(building_id)))
+             or (entity == EntityType.BARRIER)
+             or (entity in (EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER))):
+            self.mode = 0
+            self.check_pos = None
+            self.last_bridge_end = None
+            self.last_bridge_built_pos = None
+            self.last_conveyor_pos = None
+            self.last_path_built = None
+            self.current_target = None
+            return
+        
+        if entity not in TRANSPORT_TYPES:
             self.last_bridge_end = self.check_pos
             self.check_pos = None
             self.mode = 2
@@ -943,7 +1034,7 @@ class Harvester:
 
                 bid = c.get_tile_building_id(ck_pos)
                 etype = c.get_entity_type(bid)
-                if etype in transport_types and c.get_team() == c.get_team(bid):
+                if etype in TRANSPORT_TYPES and c.get_team() == c.get_team(bid):
                     if etype in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR):
                         b_dir = c.get_direction(bid)
                         if b_dir == ck_pos.direction_to(self.check_pos):
@@ -1010,6 +1101,12 @@ class Harvester:
                     c.draw_indicator_dot(current, 255, 20, 147)
                     self.defend_sentinel(c)
                     return
+                
+        if c.is_in_vision(conv_pos):
+            next_bid = c.get_tile_building_id(conv_pos)
+            if next_bid is not None and c.get_team() == c.get_team(next_bid) and c.get_entity_type(next_bid) in TRANSPORT_TYPES:
+                self.mode = 3
+                return
 
         # Azul Oscuro
         c.draw_indicator_dot(conv_pos, 26, 42, 219)
@@ -1081,6 +1178,18 @@ class Harvester:
             end = conv_pos.add(conv_dir)
             self.last_bridge_end = end
             self._check_conveyor_chain_end(c, end)
+        else:
+            if self._try_mark_path_wip(c, conv_pos):
+                if c.is_in_vision(conv_pos):
+                    mark = c.get_tile_building_id(conv_pos)
+                    val = c.get_marker_value(mark)
+                    if c.get_id() != _get_wip_marker_id(val):
+                        self.mode = 0
+                        self.last_bridge_built_pos = None
+                        self.last_conveyor_pos = None
+                        self.last_path_built = None
+                        self.current_target = None
+                        return
 
     def _check_conveyor_chain_end(self, c: Controller, end: Position):
         """
@@ -1351,6 +1460,11 @@ class Harvester:
             pass
         return None
 
+    def _try_mark_path_wip(self, c: Controller, pos: Position) -> bool:
+        if not self._in_bounds(pos):
+            return False
+        return _place_wip_marker(c, pos)
+
     def _chain_output_is_broken(self, c: Controller, bid: int, pos: Position) -> bool:
         """
         Devuelve True si el output del nodo en `pos` está roto:
@@ -1368,20 +1482,24 @@ class Harvester:
         if not c.is_in_vision(output):
             return False  # no podemos confirmar rotura sin verlo
 
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
         out_bid = c.get_tile_building_id(output)
         if out_bid is None:
             return True  # casilla vacía → roto
         out_et = c.get_entity_type(out_bid)
-        if out_et not in transport_types:
+        out_team = c.get_team(out_bid)
+        
+        if out_team != c.get_team():
+            return True
+        
+        if _is_wip_placeholder(c, out_bid):
+            return False
+        if out_et == EntityType.BARRIER:
+            return False
+        if out_et in (EntityType.SENTINEL, EntityType.BREACH, EntityType.GUNNER):
+            return False
+
+        if out_et not in TRANSPORT_TYPES:
             return True  # hay algo, pero no es transporte → roto
-        if c.get_team(out_bid) != c.get_team():
-            return True  # transporte enemigo → roto
         return False
 
     def _scan_broken_chains(self, c: Controller) -> tuple[Position, Position] | None:
@@ -1402,19 +1520,12 @@ class Harvester:
           inmediato (dist² ≤ 9) un nodo de transporte aliado cuyo output apunte
           exactamente a broken_pos.
         """
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
-        current = c.get_position()
 
         for b in c.get_nearby_buildings():
             if c.get_team(b) != c.get_team():
                 continue
             et = c.get_entity_type(b)
-            if et not in transport_types:
+            if et not in TRANSPORT_TYPES:
                 continue
             bpos = c.get_position(b)
             if bpos in self.layout_pos:
@@ -1441,7 +1552,7 @@ class Harvester:
                     if c.get_team(nb_bid) != c.get_team():
                         continue
                     nb_et = c.get_entity_type(nb_bid)
-                    if nb_et not in transport_types:
+                    if nb_et not in TRANSPORT_TYPES:
                         continue
                     nb_out = self._transport_output_pos(c, nb_bid, nb)
                     if nb_out == bpos:
@@ -1478,12 +1589,6 @@ class Harvester:
         volvemos a modo 2 directamente usando _repair_broken_pos.
         """
         current = c.get_position()
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
 
         # Sanity: si no hay estado de reparación, volver a modo 0
         if self._repair_broken_pos is None:
@@ -1532,7 +1637,7 @@ class Harvester:
             return
 
         # ── 4. Es un nodo de transporte aliado: avanzar un paso upstream ─────
-        if et not in transport_types:
+        if et not in TRANSPORT_TYPES:
             # Estructura aliada no-transporte: cadena perdida
             self._commit_repair(c)
             return
@@ -1560,7 +1665,7 @@ class Harvester:
                 if nb_et == EntityType.HARVESTER:
                     upstream_found = nb
                     break
-                if nb_et not in transport_types:
+                if nb_et not in TRANSPORT_TYPES:
                     continue
                 nb_out = self._transport_output_pos(c, nb_bid, nb)
                 if nb_out == chain_pos:
@@ -1893,18 +1998,13 @@ class Harvester:
 
     def _loops_to_me(self, c: Controller, id: int, depth: int = 6):
         me = self.last_bridge_end
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
+
         for _ in range(depth):
             entity = c.get_entity_type(id)
             end = None
             if entity == EntityType.BRIDGE:
                 end = c.get_bridge_target(id)
-            elif entity in transport_types:
+            elif entity in TRANSPORT_TYPES:
                 end = c.get_position(id).add(c.get_direction(id))
             else:
                 return False
@@ -1913,7 +2013,7 @@ class Harvester:
                 return True
             elif c.is_in_vision(end) and self._in_bounds(end):
                 id = c.get_tile_building_id(end)
-                if c.get_entity_type(id) not in transport_types:
+                if c.get_entity_type(id) not in TRANSPORT_TYPES:
                     False
             else:
                 return False
@@ -1938,12 +2038,6 @@ class Harvester:
                - Anterior: su output apunta a `pos` (nos alimenta).
                - Posterior: el output de `pos` apunta a ellos (los alimentamos).
         """
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
 
         penalty = 0
 
@@ -1972,7 +2066,7 @@ class Harvester:
                 _, nb_entity, nb_team, nb_stored, nb_output = nb_entry
                 if nb_team != team:
                     continue
-                if nb_entity not in transport_types:
+                if nb_entity not in TRANSPORT_TYPES:
                     continue
 
                 # ¿Conectado?
@@ -2009,12 +2103,6 @@ class Harvester:
         Devuelve la posición del último nodo alcanzable de la cadena, que puede
         ser un end_bridge o simplemente el nodo más lejano visible.
         """
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
         pos    = start_pos
         entity = start_entity
         bid    = start_bid
@@ -2045,7 +2133,7 @@ class Harvester:
             nxt_bid, nxt_et, nxt_team, _, _ = nxt_entry
             if nxt_team != get_cached(pos)[2]:  # distinto equipo
                 break
-            if nxt_et not in transport_types:
+            if nxt_et not in TRANSPORT_TYPES:
                 break
 
             visited.add(nxt)
@@ -2076,13 +2164,6 @@ class Harvester:
               + congestion_penalty   (cargo + vecinos extra)
         """
         import math as _math
-
-        transport_types = (
-            EntityType.BRIDGE,
-            EntityType.CONVEYOR,
-            EntityType.ARMOURED_CONVEYOR,
-            EntityType.SPLITTER,
-        )
 
         # ── Precalculate building cache (single API sweep) ───────────────────────
         # dict[Position -> (bid, entity_type, team, stored_resource, output_pos)]
@@ -2191,7 +2272,7 @@ class Harvester:
 
                 if bid is not None:
                     if team == c.get_team():
-                        if entity in transport_types:
+                        if entity in TRANSPORT_TYPES:
                             if entity == EntityType.BRIDGE:
                                 # ── Comprobación de contaminación cruzada ──────────────────
                                 # Un camino de axionita solo puede conectar a cadenas de axionita
