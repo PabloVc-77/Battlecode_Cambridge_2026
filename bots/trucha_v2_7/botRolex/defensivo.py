@@ -21,7 +21,7 @@ def _building_matches(c: Controller, building_id: int, expected_type: EntityType
         if expected_type not in conveyor_types:
             return False
     elif actual_type != expected_type:
-        return False
+        return actual_type == EntityType.FOUNDRY
     directed = (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR,
                 EntityType.SPLITTER, EntityType.SENTINEL)
     if expected_type in directed:
@@ -45,7 +45,7 @@ class Defensivo:
         self.input = False
 
         for b in ct.get_nearby_buildings():
-            if ct.get_entity_type(b) == EntityType.CORE:
+            if ct.get_entity_type(b) == EntityType.CORE and ct.get_team() == ct.get_team(b):
                 self.my_core = b
                 self.node_position = ct.get_position(b)
                 break
@@ -210,6 +210,10 @@ class Defensivo:
         elif build_type == "sentinel":
             if c.can_build_sentinel(pos, direction):
                 c.build_sentinel(pos, direction)
+                return True
+        elif build_type == "barrier":
+            if c.can_build_barrier(pos):
+                c.build_barrier(pos)
                 return True
         return False
 
