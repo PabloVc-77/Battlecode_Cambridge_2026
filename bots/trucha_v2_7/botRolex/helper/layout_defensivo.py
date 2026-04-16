@@ -159,6 +159,8 @@ def score_rotation(c: Controller, node_pos: Position, rot: str) -> tuple:
         if entity == EntityType.BARRIER:
             continue
         if entity == EntityType.FOUNDRY:
+            in_bounds += 3
+        elif entity == EntityType.SPLITTER:
             in_bounds += 2
         else:
             in_bounds += 1
