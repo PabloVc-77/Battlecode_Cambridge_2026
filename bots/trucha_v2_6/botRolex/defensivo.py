@@ -45,7 +45,7 @@ class Defensivo:
         self.input = False
 
         for b in ct.get_nearby_buildings():
-            if ct.get_entity_type(b) == EntityType.CORE:
+            if ct.get_entity_type(b) == EntityType.CORE and ct.get_team() == ct.get_team(b):
                 self.my_core = b
                 self.node_position = ct.get_position(b)
                 break

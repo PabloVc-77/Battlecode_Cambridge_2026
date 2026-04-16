@@ -23,11 +23,11 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
 # Core tiles occupy dx ∈ [-1,+1], dy ∈ [-1,+1].
 #
 #   dy   dx: -2  -1   0  +1  +2
-#   -2:      [  ][vS][F ][vS][  ]
+#   -2:      [ B][vS][F ][vS][ B]
 #   -1:      [C>][C ][C ][C ][<C]
 #    0:      [C>][C ][C ][C ][<C]  ← node_pos (core center)
 #   +1:      [C>][C ][C ][C ][<C]
-#   +2:      [  ][^S][F ][^S][  ]
+#   +2:      [ B][^S][F ][^S][ B]
 #
 # Entry: (dx, dy, EntityType, build_fn, Direction, priority)
 #   priority 0 = *Sv resource entries (bridge targets)
@@ -35,20 +35,28 @@ def _is_in_bounds(c: Controller, pos: Position) -> bool:
 BASE_LAYOUT = [
     # Priority 0 — resource entry (bridge targets for builder)
     # SPLITTERS
-    (-1, -2, EntityType.SPLITTER, "splitter", Direction.SOUTH,     0),
-    ( 1, -2, EntityType.SPLITTER, "splitter", Direction.SOUTH,     0),
+    (-1, -2, EntityType.SPLITTER, "splitter", Direction.SOUTH,     1),
+    ( 1, -2, EntityType.SPLITTER, "splitter", Direction.SOUTH,     1),
 
-    (-1,  2, EntityType.SPLITTER, "splitter", Direction.NORTH,     0),
-    ( 1,  2, EntityType.SPLITTER, "splitter", Direction.NORTH,     0),
+    (-1,  2, EntityType.SPLITTER, "splitter", Direction.NORTH,     1),
+    ( 1,  2, EntityType.SPLITTER, "splitter", Direction.NORTH,     1),
 
     # CONVEYORS
-    (-2, -1, EntityType.CONVEYOR, "conveyor", Direction.EAST,      0),
-    (-2,  0, EntityType.CONVEYOR, "conveyor", Direction.EAST,      0),
-    (-2,  1, EntityType.CONVEYOR, "conveyor", Direction.EAST,      0),
+    (-2, -1, EntityType.CONVEYOR, "conveyor", Direction.EAST,      1),
+    (-2,  0, EntityType.CONVEYOR, "conveyor", Direction.EAST,      1),
+    (-2,  1, EntityType.CONVEYOR, "conveyor", Direction.EAST,      1),
 
-    ( 2, -1, EntityType.CONVEYOR, "conveyor", Direction.WEST,      0),
-    ( 2,  0, EntityType.CONVEYOR, "conveyor", Direction.WEST,      0),
-    ( 2,  1, EntityType.CONVEYOR, "conveyor", Direction.WEST,      0),
+    ( 2, -1, EntityType.CONVEYOR, "conveyor", Direction.WEST,      1),
+    ( 2,  0, EntityType.CONVEYOR, "conveyor", Direction.WEST,      1),
+    ( 2,  1, EntityType.CONVEYOR, "conveyor", Direction.WEST,      1),
+
+    # BARRIERS
+    (-2, -2, EntityType.BARRIER, "barrier", Direction.CENTRE,      0),
+    ( 2, -2, EntityType.BARRIER, "barrier", Direction.CENTRE,      0),
+    ( 2,  2, EntityType.BARRIER, "barrier", Direction.CENTRE,      0),
+    (-2,  2, EntityType.BARRIER, "barrier", Direction.CENTRE,      0),
+    ( 0, -2, EntityType.BARRIER, "barrier", Direction.CENTRE,      0),
+    ( 0,  2, EntityType.BARRIER, "barrier", Direction.CENTRE,      0),
 
     # Priority 3 — FOUNDRY
     ( 0, -2, EntityType.FOUNDRY,  "foundry",  Direction.NORTH,     3),
@@ -148,7 +156,11 @@ def score_rotation(c: Controller, node_pos: Position, rot: str) -> tuple:
             continue
         if c.is_in_vision(slot) and c.get_tile_env(slot) == Environment.WALL:
             continue
+        if entity == EntityType.BARRIER:
+            continue
         if entity == EntityType.FOUNDRY:
+            in_bounds += 3
+        elif entity == EntityType.SPLITTER:
             in_bounds += 2
         else:
             in_bounds += 1
@@ -169,19 +181,35 @@ def choose_rotation(c: Controller, node_pos: Position) -> str:
 
 def build_rotated_layout(c : Controller, rotation: str, core_pos: Position) -> list:
     result = []
+    barriers = []
+    no_barr = []
     for (dx, dy, etype, build_fn, direction, priority) in BASE_LAYOUT:
+        if etype == EntityType.BARRIER and dx != 0:
+            barriers.append((dx, dy, etype, build_fn, direction, priority))
+            continue
         new_dx, new_dy = rotate_offset(dx, dy, rotation)
         new_dir = rotate_dir(direction, rotation)
         if etype == EntityType.SPLITTER:
-            pos = Position(core_pos.x + dx, core_pos.y + dy)
+            pos = Position(core_pos.x + new_dx, core_pos.y + new_dy)
+            #c.draw_indicator_dot(pos, 39, 46, 245)
             pos_check = pos.add(new_dir.opposite())
+            #c.draw_indicator_dot(pos_check, 39, 245, 224)
             if not _is_in_bounds(c, pos_check) or c.get_tile_env(pos_check) == Environment.WALL:
                 # Rotar para soportar conveyors
                 if dx == 1:
                     new_dir = rotate_dir(Direction.WEST, rotation)
+                    no_barr.append((dx + 1, dy))
                 else:
                     new_dir = rotate_dir(Direction.EAST, rotation)
+                    no_barr.append((dx - 1, dy))
         result.append((new_dx, new_dy, etype, build_fn, new_dir, priority))
+    
+    for bdx, bdy, etype, build_fn, dir, priority in barriers:
+        if (bdx, bdy) in no_barr:
+            continue
+        else:
+            new_dx, new_dy = rotate_offset(bdx, bdy, rotation)
+            result.append((new_dx, new_dy, etype, build_fn, dir, priority))
     return result
 
 
@@ -212,7 +240,7 @@ def compute_layout_for_core(c: Controller, core_pos: Position) -> dict:
         if not _is_in_bounds(c, pos):
             continue
         layout_positions.add(pos)
-        if priority == 0:
+        if etype in (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR, EntityType.SPLITTER):
             if c.is_in_vision(pos) and c.get_tile_env(pos) == Environment.WALL:
                 continue
             entry_positions.append(pos)

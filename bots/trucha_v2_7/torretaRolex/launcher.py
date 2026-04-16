@@ -74,8 +74,7 @@ class Launcher:
         c.draw_indicator_dot(self.semi_core, 245, 39, 39)
 
         # ── PRIORIDAD 1: Ayudar a bots aliados (atascados u oportunistas) ─────
-        if self._try_help_allies(c, my_pos, my_team):
-            return
+        self._try_help_allies(c, my_pos, my_team)
 
         # ── PRIORIDAD 2: Atacar enemigos ──────────────────────────────────────
         self._try_attack_enemies(c, my_pos, my_team)
