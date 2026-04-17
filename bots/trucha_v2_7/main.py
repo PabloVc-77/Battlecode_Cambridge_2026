@@ -47,12 +47,17 @@ class Player:
         elif etype == EntityType.BUILDER_BOT:
             if(self.brain is None): # primera ronda de su vida
                 #si hay bot enemigo cerca, pasar a healer
+                num_bots_aliados = 0
+                curar = False
                 entities = ct.get_nearby_entities()
                 for e in entities:
-                    if ct.get_entity_type(e) == EntityType.BUILDER_BOT and ct.get_team(e) != ct.get_team():
-                        self.brain = Healer(ct)
-                        break
-
+                    if ct.get_entity_type(e) == EntityType.BUILDER_BOT and ct.get_team(e) == ct.get_team():
+                        num_bots_aliados += 1
+                    elif ct.get_entity_type(e) == EntityType.BUILDER_BOT and ct.get_team(e) != ct.get_team():
+                        curar = True
+                if curar and num_bots_aliados < 4:
+                    self.brain = Healer(ct)
+                
                 round = ct.get_current_round()
                 if round > 70:
                     if ct.get_id() % 5 == 0 or ct.get_id() % 5 == 1:

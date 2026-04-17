@@ -81,6 +81,9 @@ class Ataque:
     # ──────────────────────────────────────────────────────────────────────────
 
     def run(self, c: Controller):
+        ronda = c.get_current_round()
+        if ronda < 200:
+            return
         current = c.get_position()
 
         if c.can_heal(current):
