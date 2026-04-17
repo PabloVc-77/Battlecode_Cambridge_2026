@@ -25,8 +25,9 @@ def run_core(self, c: Controller):
         if spawnBuilder(c):
             self.num_spawned += 1
     
-    if recursos[0] <= limite and recursos[1] > 533:
-        c.convert(recursos[1] - 533)
+    ax_limit = 3 * c.get_armoured_conveyor_cost()[1]
+    if ronda < 713 and recursos[0] <= limite and recursos[1] > ax_limit:
+        c.convert(recursos[1] - ax_limit)
 
 def spawnBuilder(c:Controller):
     pos = c.get_position()  # centre of the 3x3 core
