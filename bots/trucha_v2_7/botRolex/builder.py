@@ -378,10 +378,6 @@ class Harvester:
             c.draw_indicator_dot(current, 0, 200, 255)   # Cian
             self.repair_broken_chain(c)
 
-
-        for p in self.navegador._map_reachable:
-            c.draw_indicator_dot(p, 39, 245, 66)
-
     # helper de mode 0
     def _has_viable_adjacent(self, c: Controller, tile: Position) -> bool:
         """
