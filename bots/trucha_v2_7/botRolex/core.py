@@ -18,11 +18,12 @@ def run_core(self, c: Controller):
     limite = c.get_foundry_cost()[0] + c.get_builder_bot_cost()[0]
 
     if limite <= recursos[0] and recursos[0] >= 150 and c.get_current_round() >= 100: 
-        spawnBuilder(c)
-        self.num_spawned += 1
+        if spawnBuilder(c):
+            self.num_spawned += 1
     
-    if recursos[0] <= limite and recursos[1] > 533:
-        c.convert(recursos[1] - 533)
+    ax_limit = 3 * c.get_armoured_conveyor_cost()[1]
+    if ronda < 713 and recursos[0] <= limite and recursos[1] > ax_limit:
+        c.convert(recursos[1] - ax_limit)
 
 def spawnBuilder(c:Controller):
     pos = c.get_position()  # centre of the 3x3 core
