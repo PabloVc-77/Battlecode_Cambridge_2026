@@ -61,6 +61,12 @@ BASE_LAYOUT = [
     # Priority 3 — FOUNDRY
     ( 0, -2, EntityType.FOUNDRY,  "foundry",  Direction.NORTH,     3),
     ( 0,  2, EntityType.FOUNDRY,  "foundry",  Direction.NORTH,     3),
+
+    # Priority 2 — SENTINEL
+    #(-2, -2, EntityType.SENTINEL, "sentinel", Direction.NORTHWEST,   2),
+    #( 2, -2, EntityType.SENTINEL, "sentinel", Direction.NORTHEAST,   2),
+    #( 2,  2, EntityType.SENTINEL, "sentinel", Direction.SOUTHWEST,   2),
+    #(-2,  2, EntityType.SENTINEL, "sentinel", Direction.SOUTHEAST,   2),
     
 ]
 
@@ -156,7 +162,7 @@ def score_rotation(c: Controller, node_pos: Position, rot: str) -> tuple:
             continue
         if c.is_in_vision(slot) and c.get_tile_env(slot) == Environment.WALL:
             continue
-        if entity == EntityType.BARRIER:
+        if entity == EntityType.BARRIER or EntityType.SENTINEL:
             continue
         if entity == EntityType.FOUNDRY:
             in_bounds += 3

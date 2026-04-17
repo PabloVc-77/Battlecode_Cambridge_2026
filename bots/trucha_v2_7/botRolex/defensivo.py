@@ -21,7 +21,7 @@ def _building_matches(c: Controller, building_id: int, expected_type: EntityType
         if expected_type not in conveyor_types:
             return False
     elif actual_type != expected_type:
-        return actual_type == EntityType.FOUNDRY
+        return actual_type in (EntityType.FOUNDRY, EntityType.SENTINEL)
     directed = (EntityType.CONVEYOR, EntityType.ARMOURED_CONVEYOR,
                 EntityType.SPLITTER, EntityType.SENTINEL)
     if expected_type in directed:
@@ -146,7 +146,9 @@ class Defensivo:
                 continue
             
             # Evitar poner elementos de prioridad baja (son caros)
-            if _p > 2 and (not self.input or c.get_global_resources()[0] < c.get_foundry_cost()[0]):
+            if entity_type == EntityType.FOUNDRY and (not self.input or c.get_global_resources()[0] < c.get_foundry_cost()[0]):
+                continue
+            if entity_type == EntityType.SENTINEL and (not self.input or c.get_global_resources()[0] < c.get_sentinel_cost()[0]):
                 continue
             
             if best_p < _p:

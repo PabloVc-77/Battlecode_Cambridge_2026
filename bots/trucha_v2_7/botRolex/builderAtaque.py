@@ -503,74 +503,52 @@ class Ataque:
         current = c.get_position()
         target = self.objetivo
 
+        # Acercarse si no está en visión
         if not c.is_in_vision(target):
             self._navigate_to(c, target)
             return
 
         bid = c.get_tile_building_id(target)
 
-        # Ya hay una torreta aliada ahí: objetivo cumplido
-        if bid is not None and c.get_team(bid) == c.get_team() \
-                and c.get_entity_type(bid) in _TURRET_TYPES:
+        # ── Objetivo cumplido: ya hay torreta aliada ──────────────────────────
+        if (bid is not None
+                and c.get_team(bid) == c.get_team()
+                and c.get_entity_type(bid) in _TURRET_TYPES):
             self.objetivo = None
             self.pendiente_torreta = False
             self.objetivo_es_destino_libre = False
             self.objetivo_es_harvester_adj = False
             return
 
-        # La casilla está vacía (o solo tiene road) → colocar torreta
-        if bid is None or (bid is not None and c.get_team(bid) == c.get_team()
-                           and c.get_entity_type(bid) not in _TURRET_TYPES):
-            if bid is not None and c.get_team(bid) == c.get_team():
-                # Hay un edificio aliado que no es torreta (p.ej. road): destruirlo
-                if c.can_destroy(target):
-                    c.destroy(target)
-                return
-
-            self.pendiente_torreta = True
-
-            if current == target:
-                for d in _ALL_DIRS:
-                    adj = target.add(d)
-                    if _is_in_bounds(c, adj) and c.can_move(d):
-                        c.move(d)
-                        return
-                return
-
-            dist_sq = current.distance_squared(target)
-            if dist_sq > 2:
-                self._navigate_to(c, target)
-                return
-
-            self._build_turret_at(c, target)
+        # ── Objetivo imposible: edificio enemigo no passable ──────────────────
+        if (bid is not None
+                and c.get_team(bid) != c.get_team()
+                and not c.is_tile_passable(target)):
+            self.objetivo = None
+            self.pendiente_torreta = False
+            self.objetivo_es_destino_libre = False
+            self.objetivo_es_harvester_adj = False
             return
 
-        # Hay un edificio enemigo: ir encima y atacarlo
+        # ── Acercarse al objetivo ─────────────────────────────────────────────
+        if current.distance_squared(target) > 2:
+            self._navigate_to(c, target)
+            return
+
+        # ── Limpiar la casilla si hace falta ─────────────────────────────────
+        if not self._clear_tile(c, target):
+            return
+
+        # ── Casilla libre: construir torreta ──────────────────────────────────
+        # Salir de encima si estamos justo en target
         if current == target:
-            if c.can_fire(target):
-                c.fire(target)
-            if c.get_tile_building_id(target) is None:
-                self.pendiente_torreta = True
+            for d in _ALL_DIRS:
+                adj = target.add(d)
+                if _is_in_bounds(c, adj) and self._try_move(c, d):
+                    return
             return
 
-        moved = False
-        if c.is_tile_passable(target):
-            dir = self.navegador.moveTo(c, target, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            if c.can_move(dir):
-                c.move(dir)
-                moved = True
-        else:
-            if current.distance_squared(target) > 2:
-                self._navigate_to(c, target)
-
-        if moved and c.get_position() == target:
-            if c.can_fire(target):
-                c.fire(target)
-            if c.get_tile_building_id(target) is None:
-                self.pendiente_torreta = True
+        self._build_turret_at(c, target)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Búsqueda del core enemigo por simetría
@@ -642,4 +620,48 @@ class Ataque:
                                and c.get_team(bot) != c.get_team())
                     if hay_bot:
                         return True
+        return False
+
+    def _clear_tile(self, c: Controller, target: Position) -> bool:
+        building_id = c.get_tile_building_id(target)
+        if building_id is None:
+            return True
+
+        current = c.get_position()
+        is_ally = c.get_team(building_id) == c.get_team()
+
+        if is_ally:
+            if c.can_destroy(target):
+                c.destroy(target)
+                return True
+            dir = self.navegador.moveTo(c, target, four_dirs=False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            self._try_move(c, dir)
+            return False
+        else:
+            if current == target:
+                if c.can_fire(target):
+                    c.fire(target)
+                    return c.get_tile_building_id(target) is None
+                return False
+            else:
+                if c.is_tile_passable(target):
+                    dir = self.navegador.moveTo(c, target, four_dirs=False)
+                    next_pos = current.add(dir)
+                    if c.can_build_road(next_pos):
+                        c.build_road(next_pos)
+                    self._try_move(c, dir)
+                return False
+
+    def _try_move(self, c: Controller, direction: Direction) -> bool:
+        if direction == Direction.CENTRE:
+            return False
+        dest = c.get_position().add(direction)
+        if not _is_in_bounds(c, dest):
+            return False
+        if c.can_move(direction):
+            c.move(direction)
+            return True
         return False
