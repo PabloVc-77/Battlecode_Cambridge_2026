@@ -1581,6 +1581,7 @@ class BugNav:
     def moveExplore(self, c: Controller, four_dirs: bool = False) -> Direction:
         self._init_dims(c)
         self._update_map(c)
+        self._update_reachability(c)
         self._update_exploration(c)
         current = c.get_position()
         w, h = self._w, self._h

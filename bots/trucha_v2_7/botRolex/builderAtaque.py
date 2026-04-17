@@ -82,7 +82,7 @@ class Ataque:
 
     def run(self, c: Controller):
         ronda = c.get_current_round()
-        if ronda < 200:
+        if ronda < 100:
             return
         current = c.get_position()
 
