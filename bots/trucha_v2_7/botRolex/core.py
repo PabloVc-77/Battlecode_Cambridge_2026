@@ -9,7 +9,11 @@ def run_core(self, c: Controller):
                 self.num_spawned += 1
     
     ronda = c.get_current_round()
-    if self.num_spawned < 5 and ronda < 100:
+    if self.num_spawned < 4 and ronda < 10:
+        if spawnBuilder(c):
+            self.num_spawned += 1
+    # spawn healer mas tarde (para gastar menos titanio al principio)
+    elif self.num_spawned == 4 and ronda >= 20:
         if spawnBuilder(c):
             self.num_spawned += 1
         
@@ -17,9 +21,9 @@ def run_core(self, c: Controller):
 
     limite = c.get_foundry_cost()[0] + c.get_builder_bot_cost()[0]
 
-    if limite <= recursos[0] and recursos[0] >= 150 and c.get_current_round() >= 100: 
-        spawnBuilder(c)
-        self.num_spawned += 1
+    if limite <= recursos[0] and recursos[0] >= 150 and c.get_current_round() >= 100 and self.num_spawned < 20: 
+        if spawnBuilder(c):
+            self.num_spawned += 1
     
     if recursos[0] <= limite and recursos[1] > 533:
         c.convert(recursos[1] - 533)

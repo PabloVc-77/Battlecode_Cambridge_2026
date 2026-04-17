@@ -19,6 +19,7 @@ from botRolex.core import run_core
 from botRolex.builder import Harvester
 from botRolex.builderAtaque import Ataque
 from botRolex.defensivo import Defensivo
+from botRolex.builderAtaque_caminos2 import BuilderAtaqueCaminos
 from botRolex.healer import Healer
 
 # TORRETAS
@@ -53,7 +54,7 @@ class Player:
                         break
 
                 round = ct.get_current_round()
-                if round > 50:
+                if round > 70:
                     if ct.get_id() % 5 == 0 or ct.get_id() % 5 == 1:
                         self.brain = Healer(ct) # torreta
                     elif ct.get_id() % 5 == 2 or ct.get_id() % 5 == 3: #2 de cada 5
@@ -63,16 +64,15 @@ class Player:
                 elif round == 1:
                     self.brain = Defensivo(ct) # defensivo
                 elif round == 2:
-                    if width < 20:
-                        self.brain = Ataque(ct) # ataque
-                    else:
-                        self.brain = Healer(ct) # normal
+                    self.brain = Harvester(ct) # caminos
+                elif round == 3:
+                    self.brain = Harvester(ct) # caminos
                 elif round == 4:
                     self.brain = Ataque(ct) # ataque
-                elif round == 3:
-                    self.brain = Harvester(ct) # torreta
+                elif round >= 20:
+                    self.brain = Healer(ct) # curar
                 else:
-                    self.brain = Harvester(ct) # normal
+                    self.brain = Harvester(ct)
 
             self.brain.run(ct)
 
