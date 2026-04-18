@@ -5,6 +5,7 @@ import math
 import bignav_a_mem as bugnav
 
 from botRolex.helper.layout_defensivo import compute_layout_for_core
+from botRolex.helper.movement import Movement
 
 def _is_in_bounds(c: Controller, pos: Position) -> bool:
     # Kept for backward compatibility; use self._in_bounds() inside the class.
@@ -199,9 +200,9 @@ class Harvester:
         self.map_h = c.get_map_height()
 
         # Builder Vars
-        self.navegador = bugnav.BugNav(track_reachability=True)
         self.spawn = None
         self.current_target = None
+        self.move = Movement()
 
         self.conveyor_path = []      # lista de (pos, dir) para mode 4
         self.mode_after_conv = 2     # modo al que volver al terminar mode 4
@@ -295,6 +296,8 @@ class Harvester:
         self.end_bridges_titanium = layout['entry_positions']
         self.layot_entity = layout['layout']
 
+        self.navegador = bugnav.BugNav(list(self.layout_pos), track_reachability=True)
+
     def _in_bounds(self, pos: Position) -> bool:
         """Versión cacheada de _is_in_bounds — sin llamadas a la API."""
         return 0 <= pos.x < self.map_w and 0 <= pos.y < self.map_h
@@ -329,25 +332,6 @@ class Harvester:
         if self.is_axionite_path:
             return self.end_bridges_axionite
         return self.end_bridges_titanium if self.end_bridges_titanium else self.layout_pos
-
-    def _try_move(self, c: Controller, direction: Direction) -> bool:
-        """
-        Intenta mover el bot en `direction`.
-        Devuelve True si el bot se movió efectivamente, False si no.
-        """
-        if direction == Direction.CENTRE:
-            return False
-
-        dest = c.get_position().add(direction)
-
-        if not self._in_bounds(dest):
-            return False
-
-        if c.can_move(direction):
-            c.move(direction)
-            return True
-
-        return False
 
     def run(self, c: Controller):
         # Limpiar cache de conectividad de puentes al inicio de cada turno
@@ -610,18 +594,14 @@ class Harvester:
                     if d == Direction.CENTRE:
                         continue
                     adj = target.add(d)
-                    if self._in_bounds(adj) and self._try_move(c, d):
+                    if self._in_bounds(adj) and self.move._try_move(c, d):
                         break
 
             elif current.distance_squared(target) > 2:
                 siguiente_dir = self.navegador.moveTo(c, target, four_dirs=False)
                 move_pos = current.add(siguiente_dir)
                 c.draw_indicator_line(current, move_pos, 66, 245, 39)
-
-                if c.can_build_road(move_pos):
-                    c.build_road(move_pos)
-                if current.add(siguiente_dir).distance_squared(target) != 0:
-                    self._try_move(c, siguiente_dir)
+                self.move._try_move(c, siguiente_dir)
             else:
                 # Estamos al lado del target pero no podemos construir harvester
                 b_id = c.get_tile_building_id(target)
@@ -644,9 +624,7 @@ class Harvester:
         else:
             move_dir = self.navegador.moveExplore(c, four_dirs=False)
             move_pos = current.add(move_dir)
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-            self._try_move(c, move_dir)
+            self.move._try_move(c, move_dir)
 
     # MODE 1
 
@@ -738,18 +716,12 @@ class Harvester:
 
         if place == current:
             dir = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
-            move_pos = current.add(dir)
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return
 
         if current.distance_squared(place) > 2:
             dir = self.navegador.moveTo(c, place, False)
-            move_pos = current.add(dir)
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return
 
         # --- Selección del destino ---
@@ -919,10 +891,7 @@ class Harvester:
         # Moverse hasta anchor
         if current != bridge_end and current.distance_squared(bridge_end) > 2:
             dir = self.navegador.moveTo(c, bridge_end, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return
 
         # En anchor — colocar siguiente puente
@@ -935,10 +904,7 @@ class Harvester:
 
             if target_end is None:
                 dir = self.navegador.moveTo(c, self.spawn, four_dirs=False)
-                next_pos = current.add(dir)
-                if c.can_build_road(next_pos):
-                    c.build_road(next_pos)
-                self._try_move(c, dir)
+                self.move._try_move(c, dir)
                 return
 
             c.draw_indicator_dot(target_end, 255, 255, 0) # Amarillo
@@ -1048,10 +1014,7 @@ class Harvester:
 
         if not c.is_in_vision(self.check_pos):
             dir = self.navegador.moveTo(c, self.check_pos, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
 
         if not c.is_in_vision(self.check_pos):
             return
@@ -1196,10 +1159,7 @@ class Harvester:
         # ── Acercarnos si estamos lejos ──────────────────────────────────────────
         if current.distance_squared(conv_pos) > 2:
             dir = self.navegador.moveTo(c, conv_pos, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return
 
         # ── Inspeccionar la casilla ──────────────────────────────────────────────
@@ -1372,7 +1332,7 @@ class Harvester:
                                 self._mode5_sentinel_pos = None
                         else:
                             dir_ = self.navegador.moveTo(c, sp, four_dirs=False)
-                            self._try_move(c, dir_)
+                            self.move._try_move(c, dir_)
                             return
                     else:
                         self._mode5_sentinel_pos = None
@@ -1401,7 +1361,7 @@ class Harvester:
                     if not can_hit:
                         if current.distance_squared(sp) > 2:
                             dir_ = self.navegador.moveTo(c, sp, four_dirs=False)
-                            self._try_move(c, dir_)
+                            self.move._try_move(c, dir_)
                             return
                         if c.can_destroy(sp):
                             c.destroy(sp)
@@ -1457,10 +1417,7 @@ class Harvester:
         # Acercarnos a sentinel_pos
         if current.distance_squared(sentinel_pos) > 2:
             dir_ = self.navegador.moveTo(c, sentinel_pos, four_dirs=False)
-            next_pos = current.add(dir_)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir_)
+            self.move._try_move(c, dir_)
             return
 
         # ── Gestión de la casilla con barrier/clear diferido ──────────
@@ -1481,10 +1438,7 @@ class Harvester:
             # Tile libre: poner sentinel si tenemos recursos, o barrier de reserva
             if current == sentinel_pos:
                 dir_ = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
-                next_pos = current.add(dir_)
-                if c.can_build_road(next_pos):
-                    c.build_road(next_pos)
-                self._try_move(c, dir_)
+                self.move._try_move(c, dir_)
 
             if c.can_build_sentinel(sentinel_pos, best_dir):
                 self._mode5_barrier_pos = None
@@ -1509,10 +1463,7 @@ class Harvester:
         # Tile libre: poner sentinel si tenemos recursos, o barrier de reserva
         if current == sentinel_pos:
             dir_ = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
-            next_pos = current.add(dir_)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir_)
+            self.move._try_move(c, dir_)
 
         if c.can_build_barrier(sentinel_pos):
             c.build_barrier(sentinel_pos)
@@ -1686,10 +1637,7 @@ class Harvester:
         # ── 1. Moverse hasta tener chain_pos en visión ───────────────────────
         if not c.is_in_vision(chain_pos):
             dir_ = self.navegador.moveTo(c, chain_pos, four_dirs=False)
-            next_pos = current.add(dir_)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir_)
+            self.move._try_move(c, dir_)
             return
 
         # chain_pos está en visión — inspeccionarla
@@ -1764,10 +1712,7 @@ class Harvester:
                 self.repair_broken_chain(c)
             else:
                 dir_ = self.navegador.moveTo(c, upstream_found, four_dirs=False)
-                next_pos = current.add(dir_)
-                if c.can_build_road(next_pos):
-                    c.build_road(next_pos)
-                self._try_move(c, dir_)
+                self.move._try_move(c, dir_)
         else:
             # Ningún nodo upstream visible: movernos hacia chain_pos para ver más
             # Si ya estamos adyacentes y no vemos nada, la cadena está perdida
@@ -1775,10 +1720,7 @@ class Harvester:
                 self._commit_repair(c)
             else:
                 dir_ = self.navegador.moveTo(c, chain_pos, four_dirs=False)
-                next_pos = current.add(dir_)
-                if c.can_build_road(next_pos):
-                    c.build_road(next_pos)
-                self._try_move(c, dir_)
+                self.move._try_move(c, dir_)
 
     def _commit_repair(self, c: Controller):
         """
@@ -1808,11 +1750,7 @@ class Harvester:
         dist = current.distance_squared(target)
         if dist > 2:
             dir = self.navegador.moveTo(c, target, False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            if c.can_move(dir):
-                c.move(dir)
+            self.move._try_move(c, dir)
 
         if not c.is_in_vision(target):
             return
@@ -1822,11 +1760,7 @@ class Harvester:
         
         if dist == 0:
             dir = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            if c.can_move(dir):
-                c.move(dir)
+            self.move._try_move(c, dir)
         
         if c.can_build_barrier(target):
             c.build_barrier(target)
@@ -1862,10 +1796,7 @@ class Harvester:
                         return True  # skip permanente: inalcanzable
                     c.draw_indicator_line(current, objetivo, 0, 100, 0)
                     dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
-                    next_pos = current.add(dir)
-                    if c.can_build_road(next_pos):
-                        c.build_road(next_pos)
-                    self._try_move(c, dir)
+                    self.move._try_move(c, dir)
                     return False  # Nos acercamos primero
 
                 if c.can_destroy(objetivo):
@@ -1878,10 +1809,7 @@ class Harvester:
                     if c.is_tile_passable(objetivo):
                         c.draw_indicator_line(current, objetivo, 0, 100, 0)
                         dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
-                        next_pos = current.add(dir)
-                        if c.can_build_road(next_pos):
-                            c.build_road(next_pos)
-                        self._try_move(c, dir)
+                        self.move._try_move(c, dir)
                     return False  # Aún no estamos encima
 
                 # Estamos encima: atacar
@@ -1893,7 +1821,7 @@ class Harvester:
                     for d in [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]:
                         adj = objetivo.add(d)
                         if self._in_bounds(adj):
-                            if self._try_move(c, d):
+                            if self.move._try_move(c, d):
                                 break
 
                 return False  # El turno siguiente construiremos
@@ -1905,18 +1833,12 @@ class Harvester:
         if current.distance_squared(objetivo) > 2:
             c.draw_indicator_line(current, objetivo, 0, 100, 0)
             dir = self.navegador.moveTo(c, objetivo, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return False
 
         if current == objetivo:
             dir = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
 
         # En rango: construir según el tipo de edificio
         if edificio == EntityType.BARRIER and c.can_build_barrier(objetivo):
@@ -1960,10 +1882,7 @@ class Harvester:
                 return True
             # Nos acercamos para poder destruirlo (necesita dist² <= 2)
             dir = self.navegador.moveTo(c, target, four_dirs=False)
-            next_pos = current.add(dir)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return False
         else:
             # Enemigo: necesitamos estar encima
@@ -1976,10 +1895,7 @@ class Harvester:
                 # Movernos encima si es posible
                 if c.is_tile_passable(target):
                     dir = self.navegador.moveTo(c, target, four_dirs=False)
-                    next_pos = current.add(dir)
-                    if c.can_build_road(next_pos):
-                        c.build_road(next_pos)
-                    self._try_move(c, dir)
+                    self.move._try_move(c, dir)
                 return False
     
     def place_axionite_marker(self, c: Controller):
@@ -2044,7 +1960,7 @@ class Harvester:
                 # place_marker requiere que el bot esté a dist² ≤ 2 del destino.
                 if current.distance_squared(marker_spot) > 2:
                     dir = self.navegador.moveTo(c, marker_spot, four_dirs=False)
-                    self._try_move(c, dir)
+                    self.move._try_move(c, dir)
                     return  # bloqueamos el resto del turno
 
                 # ── 3. Limpiar casilla si tiene building ─────────────────────────

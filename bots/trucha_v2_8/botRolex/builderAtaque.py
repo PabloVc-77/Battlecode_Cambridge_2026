@@ -2,6 +2,9 @@ from cambc import Controller, Direction, EntityType, Environment, Position
 import bignav_a_mem as bugnav
 from bignav_a_mem import MAP_SYM
 
+from botRolex.helper.layout_defensivo import compute_layout_for_core
+from botRolex.helper.movement import Movement
+
 def _is_in_bounds(c: Controller, pos: Position) -> bool:
     w = c.get_map_width()
     h = c.get_map_height()
@@ -27,7 +30,7 @@ _BLOCK_COOLDOWN = 50
 
 class Ataque:
     def __init__(self, ct: Controller):
-        self.navegador = bugnav.BugNav()
+        self.move = Movement()
 
         self.spawn: Position | None = None
         self.my_core: Position | None = None
@@ -67,6 +70,10 @@ class Ataque:
 
         if self.my_core is not None:
             self._init_enemy_candidates(ct.get_map_width(), ct.get_map_height())
+            layout = compute_layout_for_core(ct, self.my_core)
+            self.navegador = bugnav.BugNav(list(layout['layout_positions']))
+        else:
+            self.navegador = bugnav.BugNav([])
 
     def _init_enemy_candidates(self, w: int, h: int):
         x, y = self.my_core.x, self.my_core.y
@@ -124,11 +131,7 @@ class Ataque:
         else:
             c.draw_indicator_dot(current, 100, 100, 255)
             move_dir = self.navegador.moveExplore(c, four_dirs=False)
-            move_pos = current.add(move_dir)
-            if c.can_build_road(move_pos):
-                c.build_road(move_pos)
-            if c.can_move(move_dir):
-                c.move(move_dir)
+            self.move._try_move(c, move_dir)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Gestión de objetivos bloqueados
@@ -544,7 +547,7 @@ class Ataque:
         if current == target:
             for d in _ALL_DIRS:
                 adj = target.add(d)
-                if _is_in_bounds(c, adj) and self._try_move(c, d):
+                if _is_in_bounds(c, adj) and self.move._try_move(c, d):
                     return
             return
 
@@ -579,12 +582,8 @@ class Ataque:
     def go_to_enemy_core(self, c: Controller):
         current = c.get_position()
         dir = self.navegador.moveTo(c, self.enemy_core_pos, False)
-        nextpos = current.add(dir)
         c.draw_indicator_line(current, self.enemy_core_pos, 255, 140, 0)
-        if c.can_build_road(nextpos):
-            c.build_road(nextpos)
-        if c.can_move(dir):
-            c.move(dir)
+        self.move._try_move(c, dir)
         
         for b in c.get_nearby_buildings():
             if c.get_entity_type(b) == EntityType.CORE and c.get_team(b) != c.get_team():
@@ -596,13 +595,8 @@ class Ataque:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _navigate_to(self, c: Controller, dest: Position):
-        current = c.get_position()
         d = self.navegador.moveTo(c, dest, four_dirs=False)
-        next_pos = current.add(d)
-        if c.can_build_road(next_pos):
-            c.build_road(next_pos)
-        if c.can_move(d):
-            c.move(d)
+        self.move._try_move(c, d)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Revisar si hay bots enemigos al rededor de un bot aliado
@@ -638,7 +632,7 @@ class Ataque:
             next_pos = current.add(dir)
             if c.can_build_road(next_pos):
                 c.build_road(next_pos)
-            self._try_move(c, dir)
+            self.move._try_move(c, dir)
             return False
         else:
             if current == target:
@@ -652,16 +646,5 @@ class Ataque:
                     next_pos = current.add(dir)
                     if c.can_build_road(next_pos):
                         c.build_road(next_pos)
-                    self._try_move(c, dir)
+                    self.move._try_move(c, dir)
                 return False
-
-    def _try_move(self, c: Controller, direction: Direction) -> bool:
-        if direction == Direction.CENTRE:
-            return False
-        dest = c.get_position().add(direction)
-        if not _is_in_bounds(c, dest):
-            return False
-        if c.can_move(direction):
-            c.move(direction)
-            return True
-        return False

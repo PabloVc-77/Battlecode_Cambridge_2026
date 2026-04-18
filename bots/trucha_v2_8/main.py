@@ -19,7 +19,6 @@ from botRolex.core import run_core
 from botRolex.builder import Harvester
 from botRolex.builderAtaque import Ataque
 from botRolex.defensivo import Defensivo
-from botRolex.builderAtaque_caminos2 import BuilderAtaqueCaminos
 from botRolex.healer import Healer
 
 # TORRETAS

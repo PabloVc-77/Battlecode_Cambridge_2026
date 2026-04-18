@@ -1,6 +1,7 @@
 from cambc import Controller, Direction, EntityType, Environment, Position
 import bignav_a_mem as bugnav
 from botRolex.helper.layout_defensivo import compute_layout_for_core
+from botRolex.helper.movement import Movement
 
 HEAL_PRIORITY: dict[EntityType, int] = {
     EntityType.CORE:               0,
@@ -39,7 +40,7 @@ MARKER_BROKEN_CHAIN = 0xDEAD
 
 class Healer:
     def __init__(self, c: Controller):
-        self.navegador = bugnav.BugNav()
+        self.move = Movement()
         self.map_w = c.get_map_width()
         self.map_h = c.get_map_height()
 
@@ -107,6 +108,8 @@ class Healer:
             for v in candidates:
                 if self._in_bounds(v) and c.get_tile_env(v) != Environment.WALL:
                     self.end_bridges.append(v)
+            
+            self.navegador = bugnav.BugNav(list(self.layout_positions))
 
     # =========================================================================
     # Helpers generales
@@ -116,15 +119,7 @@ class Healer:
         return 0 <= pos.x < self.map_w and 0 <= pos.y < self.map_h
 
     def _try_move(self, c: Controller, direction: Direction):
-        if direction == Direction.CENTRE:
-            return False
-        dest = c.get_position().add(direction)
-        if not self._in_bounds(dest):
-            return False
-        if c.can_move(direction):
-            c.move(direction)
-            return True
-        return False
+        return self.move._try_move(c, direction=direction)
 
     def _get_damaged_targets(self, c: Controller):
         current = c.get_position()

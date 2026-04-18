@@ -79,7 +79,7 @@ from map_symmetry import MapSymmetry
 # Constantes
 # ---------------------------------------------------------------------------
 
-CPU_BUDGET_US = 1200       # µs máximos por tick antes de ceder el control
+CPU_BUDGET_US = 1000       # µs máximos por tick antes de ceder el control
 BFS_MAX_NODES = 80        # BFS rápido cuando goal está en visión
 WALKABLE_BFS_MAX = 60     # Nodos máximos del BFS de accesibilidad en _find_unreachable_better_tile
 JUMP_CHECK_COOLDOWN = 5   # Ticks entre comprobaciones del trigger de salto
@@ -101,7 +101,8 @@ NAV_MARKER_PREFIX = 2_000_000_000
 # ---------------------------------------------------------------------------
 # Constantes nuevas
 # ---------------------------------------------------------------------------
-REACHABILITY_CPU_BUDGET_US = 600   # µs máximos por tick para el flood-fill
+REACHABILITY_CPU_BUDGET_US = 300   # µs máximos por tick para el flood-fill
+barr_ly: list[Position] = []
 
 def _encode_nav_marker(bot_id: int, landing: "Position") -> int:
     return NAV_MARKER_PREFIX + bot_id * 10_000 + landing.x * 100 + landing.y
@@ -148,15 +149,26 @@ def _can_move(c: Controller, d: Direction, w: int, h: int) -> bool:
     nxt = c.get_position().add(d)
     if not _in_bounds(nxt, w, h):
         return False
-    id = c.get_tile_building_id(nxt)
-    if c.get_entity_type(id) == EntityType.MARKER:
-        return True
+    bid = c.get_tile_building_id(nxt)
+    if bid is not None:
+        et = c.get_entity_type(bid)
+        if et == EntityType.MARKER:
+            return True
+        if et == EntityType.BARRIER and c.get_team(bid) == c.get_team() and nxt not in barr_ly:
+            return True  # barrier aliada → transitable
     return c.can_move(d) or c.is_tile_empty(nxt) or c.is_tile_passable(nxt)
 
 
 def _passable(c: Controller, pos: Position) -> bool:
     """Versión simplificada usando la API directamente (v4.0)."""
-    return c.is_in_vision(pos) and (c.is_tile_passable(pos) or c.is_tile_empty(pos))
+    vision = c.is_in_vision(pos)
+    if vision:
+        bid = c.get_tile_building_id(pos)
+    else:
+        return False
+    return c.is_tile_passable(pos) or c.is_tile_empty(pos) \
+        or (bid is not None and c.get_entity_type(bid) == EntityType.BARRIER and c.get_team() == c.get_team(bid) and pos not in barr_ly)
+
 
 
 def _passable_known(c: Controller, pos: Position,
@@ -294,7 +306,9 @@ def _astar_tick(state: AStarState, c: Controller, w: int, h: int,
 # ---------------------------------------------------------------------------
 
 class BugNav:
-    def __init__(self, track_reachability: bool = False):
+    def __init__(self, barriers_in_layout: list[Position], track_reachability: bool = False):
+        global barr_ly
+        barr_ly = barriers_in_layout
         # Estado moveTo
         self.prevGoal: Position | None = None
         self.start: Position | None = None

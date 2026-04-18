@@ -6,6 +6,8 @@ from botRolex.helper.layout_defensivo import (
     choose_rotation, build_rotated_layout, compute_layout_for_core,
 )
 
+from botRolex.helper.movement import Movement
+
 
 # ---------------------------------------------------------------------------
 # Build helpers
@@ -35,7 +37,7 @@ def _building_matches(c: Controller, building_id: int, expected_type: EntityType
 
 class Defensivo:
     def __init__(self, ct: Controller):
-        self.navegador = bugnav.BugNav()
+        self.move = Movement()
         self.my_core = None
         self.node_position = None
         self.rotation = None
@@ -55,6 +57,8 @@ class Defensivo:
         self.layout = result['layout']
         self.entry_points = result['entry_positions']
         self.layout_positions = result['layout_positions']
+
+        self.navegador = bugnav.BugNav(list(self.layout_positions))
 
     def run(self, c: Controller):
         if self.my_core is None:
@@ -105,8 +109,7 @@ class Defensivo:
             slot_pos = Position(node_pos.x + dx, node_pos.y + dy)
             if not c.is_in_vision(slot_pos):
                 dir = self.navegador.moveTo(c, slot_pos, False)
-                if c.can_move(dir):
-                    c.move(dir)
+                self.move._try_move(c, dir)
             c.draw_indicator_dot(slot_pos, 255, 200, 0)
             if not c.is_in_vision(slot_pos):
                 return
@@ -114,15 +117,13 @@ class Defensivo:
         else:
             if heal_spot is not None and current.distance_squared(heal_spot) > 2:
                 dir = self.navegador.moveTo(c, heal_spot, False)
-                if c.can_move(dir):
-                    c.move(dir)
+                self.move._try_move(c, dir)
             else:
                 self._idle_move(c, node_pos)
         
         if heal_spot is not None and current.distance_squared(heal_spot) > 2 and c.get_move_cooldown() == 0:
             dir = self.navegador.moveTo(c, heal_spot, False)
-            if c.can_move(dir):
-                c.move(dir)
+            self.move._try_move(c, dir)
 
     def _find_next_build_target(self, c: Controller, node_pos: Position):
         out_of_vision_fallback = None
@@ -173,25 +174,19 @@ class Defensivo:
 
         if not self._try_build(c, slot_pos, build_fn, direction) and current.distance_squared(slot_pos) > 2:
             dir_ = self.navegador.moveTo(c, slot_pos, four_dirs=False)
-            next_pos = current.add(dir_)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            if c.can_move(dir_):
-                c.move(dir_)
+            self.move._try_move(c, dir_)
 
     def _idle_move(self, c: Controller, node_pos: Position):
         current = c.get_position()
         if current.distance_squared(node_pos) > 4:
             direc = self.navegador.moveTo(c, node_pos, four_dirs=False)
-            if c.can_move(direc):
-                c.move(direc)
+            self.move._try_move(c, direc)
 
     def _try_build(self, c: Controller, pos: Position, build_type: str,
                    direction: Direction) -> bool:
         if pos == c.get_position():
             dir_ = self.navegador.moveTo(c, c.get_position(self.my_core), four_dirs=False)
-            if c.can_move(dir_):
-                c.move(dir_)
+            self.move._try_move(c, dir_)
             return False
 
         if build_type == "splitter":
@@ -232,11 +227,7 @@ class Defensivo:
                 c.destroy(target)
                 return True
             dir_ = self.navegador.moveTo(c, target, four_dirs=False)
-            next_pos = current.add(dir_)
-            if c.can_build_road(next_pos):
-                c.build_road(next_pos)
-            if c.can_move(dir_):
-                c.move(dir_)
+            self.move._try_move(c, dir_)
             return False
         else:
             if current == target:
@@ -246,9 +237,5 @@ class Defensivo:
                 return False
             if c.is_tile_passable(target):
                 dir_ = self.navegador.moveTo(c, target, four_dirs=False)
-                next_pos = current.add(dir_)
-                if c.can_build_road(next_pos):
-                    c.build_road(next_pos)
-                if c.can_move(dir_):
-                    c.move(dir_)
+                self.move._try_move(c, dir_)
             return False
