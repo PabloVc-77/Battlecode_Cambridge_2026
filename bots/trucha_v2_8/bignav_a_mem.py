@@ -71,6 +71,7 @@ el A* simplemente no avanza ese tick y BugNav cubre el movimiento.
 from cambc import Controller, Direction, Position, EntityType, Environment
 import math
 import random
+import collections
 
 from map_symmetry import MapSymmetry
 
@@ -78,7 +79,7 @@ from map_symmetry import MapSymmetry
 # Constantes
 # ---------------------------------------------------------------------------
 
-CPU_BUDGET_US = 800       # µs máximos por tick antes de ceder el control
+CPU_BUDGET_US = 1200       # µs máximos por tick antes de ceder el control
 BFS_MAX_NODES = 80        # BFS rápido cuando goal está en visión
 WALKABLE_BFS_MAX = 60     # Nodos máximos del BFS de accesibilidad en _find_unreachable_better_tile
 JUMP_CHECK_COOLDOWN = 5   # Ticks entre comprobaciones del trigger de salto
@@ -100,7 +101,7 @@ NAV_MARKER_PREFIX = 2_000_000_000
 # ---------------------------------------------------------------------------
 # Constantes nuevas
 # ---------------------------------------------------------------------------
-REACHABILITY_CPU_BUDGET_US = 270   # µs máximos por tick para el flood-fill
+REACHABILITY_CPU_BUDGET_US = 600   # µs máximos por tick para el flood-fill
 
 def _encode_nav_marker(bot_id: int, landing: "Position") -> int:
     return NAV_MARKER_PREFIX + bot_id * 10_000 + landing.x * 100 + landing.y
@@ -293,7 +294,7 @@ def _astar_tick(state: AStarState, c: Controller, w: int, h: int,
 # ---------------------------------------------------------------------------
 
 class BugNav:
-    def __init__(self):
+    def __init__(self, track_reachability: bool = False):
         # Estado moveTo
         self.prevGoal: Position | None = None
         self.start: Position | None = None
@@ -386,11 +387,17 @@ class BugNav:
         #   ticks sin perder estado).
         # _reach_seeds: tiles desde donde sembrar el flood-fill (posición del bot
         #   u otros tiles aliados confirmados).
-        self._map_reachable:    set[Position] = set()
-        self._reach_dirty:      bool          = True
-        self._reach_frontier:   list[Position] = []
-        self._reach_visited:    set[Position] = set()
-        self._reach_seeds:      set[Position] = set()
+        self._track_reachability = track_reachability
+        
+        if track_reachability:
+            self._map_reachable:    set[Position] = set()
+            self._reach_dirty:      bool          = True
+            self._reach_frontier: collections.deque = collections.deque()
+            self._reach_visited:    set[Position] = set()
+            self._reach_seeds:      set[Position] = set()
+            self._reach_hard_reset: bool = True   # tile pasable→bloqueado: reinicio completo
+            self._reach_new_tiles:  list = []     # tiles nuevos pasables: inyectar en frontera
+            self._reach_complete: bool = False
 
         # -------------------------------------------------------------------------
 
@@ -403,35 +410,35 @@ class BugNav:
         if self._update_map_cooldown > 0:
             self._update_map_cooldown -= 1
             return
-        self._update_map_cooldown = 1 # Actualizar cada 2 ticks
-        
+        self._update_map_cooldown = 1
+
         w, h = self._w, self._h
-        # Al final de _update_map, tras el bucle:
-        old_pass_count = len(self._map_passable)   # snapshot antes del bucle — ver nota
         for pos in c.get_nearby_tiles():
             env = c.get_tile_env(pos)
             MAP_SYM.update_terrain(pos, env, w, h)
 
-            if _passable(c, pos):
-                self._map_passable.add(pos)
-                self._map_blocked.discard(pos)
+            if _passable(c, pos) or (c.is_in_vision(pos) and c.get_tile_builder_bot_id(pos) is not None):
+                if pos not in self._map_passable:
+                    self._map_passable.add(pos)
+                    self._map_blocked.discard(pos)
+                    if self._track_reachability:
+                        self._reach_new_tiles.append(pos)
             else:
+                if pos in self._map_passable:
+                    self._map_passable.discard(pos)
+                    if self._track_reachability:
+                        self._reach_hard_reset = True 
                 self._map_blocked.add(pos)
-                self._map_passable.discard(pos)
                 if env == Environment.WALL:
                     self._map_walls.add(pos)
                 elif env in (Environment.ORE_TITANIUM, Environment.ORE_AXIONITE):
                     self._map_ores.add(pos)
-            
-            # Track Launchers independently
+
             bid = c.get_tile_building_id(pos)
             if bid is not None and c.get_entity_type(bid) == EntityType.LAUNCHER:
                 self._map_launchers.add(pos)
             else:
                 self._map_launchers.discard(pos)
-        
-        if len(self._map_passable) != old_pass_count:
-            self._reach_dirty = True
 
     def reset(self):
         self.mode = "GOAL"
@@ -489,7 +496,7 @@ class BugNav:
                     queue.append(nb)
         return False
     
-    def _update_reachability(self, c: Controller) -> None:
+    def _update_reachability(self, c: Controller, budget_us: int | None = None) -> None:
         """
         Flood-fill incremental sobre _map_passable para calcular _map_reachable.
 
@@ -501,50 +508,68 @@ class BugNav:
             from bignav_a_mem import MAP_REACH  # instancia pública del set
             if pos in MAP_REACH:  # O(1)
         """
+        if not self._track_reachability:
+            return
         current = c.get_position()
 
-        # Añadir la posición actual como seed siempre (el bot siempre es alcanzable)
-        if current not in self._reach_visited:
-            self._reach_seeds.add(current)
-            self._reach_dirty = True
-
-        # Si el flood-fill anterior terminó y hay cambios → reiniciar
-        if self._reach_dirty and not self._reach_frontier:
+        # ── Reinicio completo solo si un tile pasable se bloqueó,
+        #    o si el bot está en zona desconocida (aterrizaje por launcher)
+        if self._reach_hard_reset:
             self._map_reachable.clear()
             self._reach_visited.clear()
-            # Sembrar desde todas las seeds registradas que sean pasables o la pos actual
-            for seed in self._reach_seeds:
-                if seed not in self._reach_visited:
-                    self._reach_visited.add(seed)
-                    self._reach_frontier.append(seed)
-                    self._map_reachable.add(seed)
-            self._reach_dirty = False
+            self._reach_frontier.clear()
+            self._reach_new_tiles.clear()
+            self._reach_visited.add(current)
+            self._reach_frontier.append(current)
+            self._map_reachable.add(current)
+            self._reach_hard_reset = False
+            # No return: seguir expandiendo este mismo tick
+        elif current not in self._reach_visited:
+            # bot en zona nueva (launcher) → solo añadir como seed adicional
+            self._reach_visited.add(current)
+            self._reach_frontier.append(current)
+            self._map_reachable.add(current)
 
-        # Avanzar el flood-fill dentro del presupuesto
-        w, h = self._w, self._h
-        frontier = self._reach_frontier
-        visited  = self._reach_visited
+        # ── Inyectar tiles nuevos pasables en la frontera
+        #    Solo si ya son adyacentes a un tile alcanzable (evita falsos positivos)
+        if self._reach_new_tiles:
+            for pos in self._reach_new_tiles:
+                if pos in self._reach_visited:
+                    continue
+                # ¿Algún vecino ya está en _map_reachable?
+                for d in _ALL_DIRS:
+                    nb = pos.add(d)
+                    if nb in self._map_reachable:
+                        self._reach_visited.add(pos)
+                        self._reach_frontier.append(pos)
+                        self._map_reachable.add(pos)
+                        break
+            self._reach_new_tiles.clear()
+
+        # ── Expandir dentro del presupuesto
+        w, h      = self._w, self._h
+        frontier  = self._reach_frontier
+        visited   = self._reach_visited
         reachable = self._map_reachable
         passable  = self._map_passable
-
-        ini = c.get_cpu_time_elapsed()
+        t_start   = c.get_cpu_time_elapsed()
+        deadline = t_start + (budget_us if budget_us is not None else REACHABILITY_CPU_BUDGET_US)
+        # También respetar el límite absoluto del tick
+        deadline = min(deadline, CPU_BUDGET_US)
 
         while frontier:
-            if c.get_cpu_time_elapsed() - ini >= REACHABILITY_CPU_BUDGET_US:
-                break   # continuamos el próximo tick
-            pos = frontier.pop()
+            if c.get_cpu_time_elapsed() - t_start >= deadline:
+                return
+            pos = frontier.popleft()
             for d in _ALL_DIRS:
                 nb = pos.add(d)
-                if nb in visited:
+                if nb in visited or not _in_bounds(nb, w, h):
                     continue
-                if not _in_bounds(nb, w, h):
-                    continue
-                # Un tile es alcanzable si está en _map_passable (confirmado pasable)
-                # o es la posición actual del bot (garantizado alcanzable)
                 if nb in passable or nb == current:
                     visited.add(nb)
                     reachable.add(nb)
                     frontier.append(nb)
+        self._reach_complete: bool = len(frontier) == 0
 
     # =========================================================================
     # MOVE TO

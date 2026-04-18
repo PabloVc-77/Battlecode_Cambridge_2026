@@ -159,10 +159,10 @@ def _is_conv_better(c: Controller, ini: Position, end: Position, layout, entity_
             building_id = c.get_tile_building_id(neighbor)
             if building_id is not None:
                 entity = c.get_entity_type(building_id)
-                if entity == EntityType.ROAD:
+                if entity == EntityType.ROAD or (entity == EntityType.BARRIER and c.get_team() == c.get_team(building_id)):
                     pass  # tratar como casilla libre
                 elif not (c.is_tile_passable(neighbor) and c.get_tile_builder_bot_id(neighbor) is None) and (entity != EntityType.BARRIER or c.get_team() != c.get_team(building_id)):
-                    if neighbor != c.get_position() and entity not in TRANSPORT_TYPES:
+                    if neighbor != c.get_position() or entity in TRANSPORT_TYPES:
                         continue
                 elif entity in (EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR, EntityType.BRIDGE) and c.get_team() == c.get_team(building_id):
                     # Permitir si es el destino final, saltar si es nodo intermedio
@@ -199,7 +199,7 @@ class Harvester:
         self.map_h = c.get_map_height()
 
         # Builder Vars
-        self.navegador = bugnav.BugNav()
+        self.navegador = bugnav.BugNav(track_reachability=True)
         self.spawn = None
         self.current_target = None
 
@@ -214,9 +214,11 @@ class Harvester:
             # mode 4: conveyor mode (Azul Oscuro)
             # mode 5: defender ruta con sentinel (Rosa)
             # mode 6: rastrear cadena rota upstream hasta harvester (Cian)
+            # mode 7: Barriers en Harvester (Verde no azul)
         self.last_bridge_end = None
         self.last_bridge_built_pos = None
         self.last_conveyor_pos: Position | None = None   # posición del último conveyor colocado en modo 4
+        self.last_conveyor_dir: Direction | None = None     
         self.last_path_built: Position | None = None     # posición de la útima construcción del camino
         self.check_pos = None
 
@@ -248,6 +250,18 @@ class Harvester:
         # Ban ore si no podemos llegar
         self.banned_ores: set[Position] = set()
 
+        # ── Modo 5: defensa con sentinel ─────────────────────────────────────
+        # mode 5: Defender ruta colocando un sentinel en last_bridge_end
+        #   - Se activa desde modos 2/3/4 al ver un enemigo (bot o torreta)
+        #   - Espera a que el objetivo lleve ≥5 turnos sin aparecer
+        #   - Destruye el sentinel y retoma el modo anterior
+        self._mode5_prev_mode: int = 2          # modo al que volver al salir
+        self._mode5_threat_pos: Position | None = None   # última pos del enemigo
+        self._mode5_sentinel_pos: Position | None = None # donde construimos el sentinel
+        self._mode5_gone_since: int = 0         # turno en que el enemigo desapareció
+        self._mode5_absent_turns: int = 0       # turnos consecutivos sin ver al enemigo
+        self._mode5_barrier_pos: Position | None = None
+
         # ── Modo 6: reparar cadena rota ───────────────────────────────────────
         # Se activa desde modo 0 cuando se detecta un nodo de transporte aliado
         # cuyo output está desconectado (cadena rota sin harvester al final).
@@ -263,17 +277,9 @@ class Harvester:
         self._repair_chain_pos: Position | None = None
         self._repair_harvester: Position | None = None
 
-        # ── Modo 5: defensa con sentinel ─────────────────────────────────────
-        # mode 5: Defender ruta colocando un sentinel en last_bridge_end
-        #   - Se activa desde modos 2/3/4 al ver un enemigo (bot o torreta)
-        #   - Espera a que el objetivo lleve ≥5 turnos sin aparecer
-        #   - Destruye el sentinel y retoma el modo anterior
-        self._mode5_prev_mode: int = 2          # modo al que volver al salir
-        self._mode5_threat_pos: Position | None = None   # última pos del enemigo
-        self._mode5_sentinel_pos: Position | None = None # donde construimos el sentinel
-        self._mode5_gone_since: int = 0         # turno en que el enemigo desapareció
-        self._mode5_absent_turns: int = 0       # turnos consecutivos sin ver al enemigo
-        self._mode5_barrier_pos: Position | None = None
+        # ── Modo 7: defensa con Barrier a Harvester ─────────────────────────────────────
+        self.mode_after_barrier: int = 0
+        self.pending_barriers_harvester: set[Position] = set()
 
         builds = c.get_nearby_buildings()
         for b in builds:
@@ -292,6 +298,30 @@ class Harvester:
     def _in_bounds(self, pos: Position) -> bool:
         """Versión cacheada de _is_in_bounds — sin llamadas a la API."""
         return 0 <= pos.x < self.map_w and 0 <= pos.y < self.map_h
+
+    def _make_pending_barriers(
+        self,
+        c: Controller,
+        viable_places: list[Position],
+        extra_places_for_turrent: list[Position],
+        reserved_positions: list[Position] | None = None,
+    ) -> set[Position]:
+        pending = set(viable_places).union(extra_places_for_turrent)
+        pending -= self.layout_pos
+
+        if reserved_positions is not None:
+            pending -= set(reserved_positions)
+
+        filtered = set()
+        for pos in pending:
+            if not self._in_bounds(pos):
+                continue
+            if c.is_in_vision(pos):
+                bid = c.get_tile_building_id(pos)
+                if bid is not None and c.get_entity_type(bid) in TRANSPORT_TYPES and c.get_team() == c.get_team(bid):
+                    continue
+            filtered.add(pos)
+        return filtered
 
     @property
     def _active_ends(self) -> list:
@@ -377,10 +407,25 @@ class Harvester:
         elif self.mode == 6:
             c.draw_indicator_dot(current, 0, 200, 255)   # Cian
             self.repair_broken_chain(c)
+        elif self.mode == 7:
+            c.draw_indicator_dot(current, 0, 255, 187)
+            self.barrier_harvester(c)
+        
+        remaining = 2000 - c.get_cpu_time_elapsed()
+        if remaining > 50 and not self.navegador._reach_complete:  # margen mínimo para no llamar si no vale la pena
+            self.navegador._update_reachability(c, budget_us=remaining)
 
+        return
 
         for p in self.navegador._map_reachable:
-            c.draw_indicator_dot(p, 39, 245, 66)
+            if not c.is_in_vision(p):
+                continue
+            c.draw_indicator_dot(p, 9, 230, 9)
+        
+        for p in self.navegador._map_reachable:
+            if c.is_in_vision(p):
+                continue
+            c.draw_indicator_dot(p, 9, 230, 9)
 
     # helper de mode 0
     def _has_viable_adjacent(self, c: Controller, tile: Position) -> bool:
@@ -675,7 +720,13 @@ class Harvester:
 
         if place in active_ends:
             self.current_target = None
-            self.mode = 0
+            self.mode = 7 if not self.is_axionite_path else 0
+            self.mode_after_barrier = 0
+            self.pending_barriers_harvester = self._make_pending_barriers(
+                c,
+                viable_places,
+                extra_places_for_turrent,
+            )
             self.last_bridge_built_pos = None
             self.last_conveyor_pos = None
             self.last_path_built = None
@@ -735,7 +786,14 @@ class Harvester:
                         self.last_conveyor_dir = conv_dir
                     else:
                         self._try_mark_path_wip(c, conv_pos)
-                    self.mode = 4
+                    self.mode = 7 if not self.is_axionite_path else 4
+                    self.mode_after_barrier = 4
+                    self.pending_barriers_harvester = self._make_pending_barriers(
+                        c,
+                        viable_places,
+                        extra_places_for_turrent,
+                        reserved_positions=[conv_pos] + [pos for pos, _ in conv_path],
+                    )
                     return
 
             c.draw_indicator_dot(target_end, 255, 255, 255)
@@ -764,7 +822,14 @@ class Harvester:
 
             if end in active_ends:
                 self.current_target = None
-                self.mode = 0
+                self.mode = 7 if not self.is_axionite_path else 0
+                self.mode_after_barrier = 0
+                self.pending_barriers_harvester = self._make_pending_barriers(
+                    c,
+                    viable_places,
+                    extra_places_for_turrent,
+                    reserved_positions=[place],
+                )
                 self.last_bridge_end = None
                 self.last_bridge_built_pos = None
                 self.last_conveyor_pos = None
@@ -773,9 +838,23 @@ class Harvester:
                   and c.get_tile_building_id(end) is not None
                   and c.get_entity_type(c.get_tile_building_id(end)) in (EntityType.BRIDGE, EntityType.ARMOURED_CONVEYOR, EntityType.CONVEYOR)
                   and c.get_team() == c.get_team(c.get_tile_building_id(end))):
-                self.mode = 3
+                self.mode = 7 if not self.is_axionite_path else 3
+                self.mode_after_barrier = 3
+                self.pending_barriers_harvester = self._make_pending_barriers(
+                    c,
+                    viable_places,
+                    extra_places_for_turrent,
+                    reserved_positions=[place],
+                )
             else:
-                self.mode = 2
+                self.mode = 7 if not self.is_axionite_path else 2
+                self.mode_after_barrier = 2
+                self.pending_barriers_harvester = self._make_pending_barriers(
+                    c,
+                    viable_places,
+                    extra_places_for_turrent,
+                    reserved_positions=[place],
+                )
         else:
             if self._try_mark_path_wip(c, place):
                 if c.is_in_vision(place):
@@ -1075,6 +1154,10 @@ class Harvester:
 
         current = c.get_position()
         conv_pos, conv_dir = self.conveyor_path[0]
+
+        if conv_pos is None or conv_dir is None:
+            #espero q no pase
+            pass
 
         # ── Detección de torreta enemiga en la siguiente casilla (modo 4) ────────
         if c.is_in_vision(conv_pos) and not self.is_axionite_path:
@@ -1710,6 +1793,48 @@ class Harvester:
         self._repair_harvester  = None
         self.mode = 2
 
+    # MODE 7
+
+    def barrier_harvester(self, c: Controller):
+        if len(self.pending_barriers_harvester) == 0:
+            self.mode = self.mode_after_barrier
+            return
+        
+        current = c.get_position()
+        pending = list(self.pending_barriers_harvester)
+        pending.sort(key=lambda p: current.distance_squared(p), reverse=True)
+        
+        target = pending[0]
+        dist = current.distance_squared(target)
+        if dist > 2:
+            dir = self.navegador.moveTo(c, target, False)
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir):
+                c.move(dir)
+
+        if not c.is_in_vision(target):
+            return
+
+        if not self._clear_tile(c, target):
+            return
+        
+        if dist == 0:
+            dir = self.navegador._any_free_dir(c, False, c.get_map_width(), c.get_map_height())
+            next_pos = current.add(dir)
+            if c.can_build_road(next_pos):
+                c.build_road(next_pos)
+            if c.can_move(dir):
+                c.move(dir)
+        
+        if c.can_build_barrier(target):
+            c.build_barrier(target)
+            pending.pop(0)
+            self.pending_barriers_harvester = set(pending)
+            if len(self.pending_barriers_harvester) == 0:
+                self.mode = self.mode_after_barrier
+
     # UTILITY
 
     def construir(self, c: Controller, objetivo: Position, edificio: EntityType) -> bool:
@@ -2245,6 +2370,9 @@ class Harvester:
                 if not c.is_in_vision(candidate):
                     continue
                 if candidate not in self._active_ends and candidate in self.layout_pos:
+                    continue
+                if candidate not in self.navegador._map_reachable and candidate not in self._active_ends:
+                    c.draw_indicator_dot(candidate, 230, 9, 9)
                     continue
 
                 env = c.get_tile_env(candidate)
