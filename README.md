@@ -14,8 +14,6 @@ Battlecode_Cambridge_2026/
 │   ├── Sprint_3/          # Versiones camalar v3.x + trucha v1.x
 │   ├── trucha_v2_x/       # Versiones trucha v2.x (versión activa)
 │   └── starter/           # Bot de ejemplo del juego
-├── conductor/             # Herramientas y guías de estilo
-├── docs/                  # Documentación de la API y reglas del juego
 ├── maps/                  # Mapas de prueba
 ├── pathFinders/           # Experimentos con algoritmos de navegación
 └── some_other_code/       # Código auxiliar y experimentos
