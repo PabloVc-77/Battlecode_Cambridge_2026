@@ -1,4 +1,4 @@
-# 🤖 Battlecode Cambridge 2026 — Team Rolex
+# 🤖 Battlecode Cambridge 2026
 
 Bot desarrollado en Python para la competición **Battlecode Cambridge 2026**, un juego de estrategia en tiempo real por turnos donde dos equipos de bots compiten por controlar recursos y destruir el core enemigo.
 
