@@ -201,4 +201,4 @@ El punto de entrada es `main.py`, que implementa la clase `Player` requerida por
 
 ## 👥 Equipo
 
-Proyecto universitario desarrollado en la **Universitat Politècnica de València (UPV)** — 3º Ingeniería Informática.
+Proyecto universitario desarrollado en la **Universitat Politècnica de València (UPV)** — 3º Ingeniería Informática
